@@ -1,0 +1,53 @@
+{
+  // logos-bot on Cloudflare Workers.
+  // Stage 1 scaffold: boots an empty `export default { fetch }` shell with the
+  // D1 + KV bindings the later stages need. Secrets are set with
+  // `wrangler secret put` (see .dev.vars.example for local dev), NOT here.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "logos-bot",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-09-01",
+  // svg2png-wasm / photon and standard byte handling want Node compat shims.
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+
+  // Cloudflare D1 — replaces the local better-sqlite3 catalog.db.
+  // Create with:  wrangler d1 create logos-bot-catalog
+  // then paste the returned database_id below.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "logos-bot-catalog",
+      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // KV — replaces the in-memory ConversationStore (per-user dialog state, TTL'd).
+  // Create with:  wrangler kv namespace create CONVERSATIONS
+  // then paste the returned id below.
+  "kv_namespaces": [
+    {
+      "binding": "CONVERSATIONS",
+      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+    }
+  ],
+
+  // Cloudflare Images binding — the sharp replacement for resize + composite.
+  // Used only on custom-size renders; the SVG natural-PNG path is pure WASM.
+  "images": { "binding": "IMAGES" },
+
+  // Non-secret configuration. Secrets (SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET,
+  // GOOGLE_SERVICE_ACCOUNT_KEY) are injected via `wrangler secret put`.
+  "vars": {
+    "AI_PROVIDER": "vertex",
+    "GEMINI_MODEL": "gemini-2.5-flash",
+    "MAX_OUTPUT_SIZE": "4096",
+    "DRIVE_ROOT_FOLDER_ID": "",
+    "VERTEX_PROJECT_ID": "",
+    "VERTEX_LOCATION": "us-central1",
+    "AUDIT_NOTIFY_CHANNELS": ""
+  }
+}

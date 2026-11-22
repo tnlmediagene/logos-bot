@@ -22,22 +22,7 @@ export interface RenderResult {
   actualHeight: number;
 }
 
-export function validateDimensions(
-  width: number,
-  height: number,
-  maxSize: number
-): { valid: boolean; error?: string } {
-  if (!Number.isInteger(width) || !Number.isInteger(height)) {
-    return { valid: false, error: "尺寸必須為整數。" };
-  }
-  if (width <= 0 || height <= 0) {
-    return { valid: false, error: "尺寸必須大於零。" };
-  }
-  if (width > maxSize || height > maxSize) {
-    return { valid: false, error: `尺寸不可超過 ${maxSize}x${maxSize}。` };
-  }
-  return { valid: true };
-}
+export { validateDimensions } from "./validate-dimensions";
 
 /**
  * Rasterise an SVG to a PNG at its own natural size (from the SVG's width /

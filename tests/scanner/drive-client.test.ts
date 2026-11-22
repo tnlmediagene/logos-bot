@@ -1,23 +1,32 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { DriveClient, formatForName } from "../../src/scanner/drive-client";
 
-// A minimal service-account-shaped key so the constructor's JSON.parse + GoogleAuth
-// don't throw. We never make a real network call — the drive client is stubbed.
-const FAKE_KEY = JSON.stringify({
-  type: "service_account",
-  project_id: "p",
-  private_key: "x",
-  client_email: "x@x.iam.gserviceaccount.com",
+// An injectable token provider so no real auth/network happens; fetch is stubbed.
+const tokenProvider = { getAccessToken: async () => "drive-access-token" };
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
-function makeClient(listImpl: (params: any) => Promise<any>): DriveClient {
-  const client = new DriveClient(FAKE_KEY);
-  (client as any).drive = { files: { list: vi.fn(listImpl) } };
-  return client;
+/** Stub global fetch with a queue of JSON responses (one per call). */
+function stubFetchJson(responses: any[]) {
+  let call = 0;
+  const fn = vi.fn(async () => {
+    const body = responses[Math.min(call, responses.length - 1)];
+    call++;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    };
+  });
+  vi.stubGlobal("fetch", fn);
+  return fn;
 }
 
 describe("format / support by extension (Drive mislabels .svg)", () => {
-  const client = new DriveClient(FAKE_KEY);
+  const client = new DriveClient(tokenProvider);
   const f = (name: string, mimeType: string) => ({ id: "1", name, mimeType, parents: [], modifiedTime: "", size: 0 });
 
   it("treats a .svg stored as text/xml as a supported svg", () => {
@@ -37,43 +46,61 @@ describe("format / support by extension (Drive mislabels .svg)", () => {
 
 describe("DriveClient.listFolder", () => {
   it("passes shared-drive params so Shared Drive contents are returned", async () => {
-    let captured: any;
-    const client = makeClient(async (params) => {
-      captured = params;
-      return { data: { files: [], nextPageToken: undefined } };
-    });
+    const fetchMock = stubFetchJson([{ files: [], nextPageToken: undefined }]);
+    const client = new DriveClient(tokenProvider);
 
     await client.listFolder("folder-1");
 
-    expect(captured.supportsAllDrives).toBe(true);
-    expect(captured.includeItemsFromAllDrives).toBe(true);
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("supportsAllDrives=true");
+    expect(url).toContain("includeItemsFromAllDrives=true");
+    // Auth header carries the injected token.
+    const init = fetchMock.mock.calls[0][1] as any;
+    expect(init.headers.authorization).toBe("Bearer drive-access-token");
   });
 
   it("maps returned files and follows pagination", async () => {
-    const pages = [
+    const fetchMock = stubFetchJson([
       {
-        data: {
-          files: [
-            { id: "a", name: "logo.svg", mimeType: "image/svg+xml", parents: ["folder-1"], modifiedTime: "t", size: "10" },
-          ],
-          nextPageToken: "next",
-        },
+        files: [
+          { id: "a", name: "logo.svg", mimeType: "image/svg+xml", parents: ["folder-1"], modifiedTime: "t", size: "10" },
+        ],
+        nextPageToken: "next",
       },
       {
-        data: {
-          files: [
-            { id: "b", name: "mark.png", mimeType: "image/png", parents: ["folder-1"], modifiedTime: "t", size: "20" },
-          ],
-          nextPageToken: undefined,
-        },
+        files: [
+          { id: "b", name: "mark.png", mimeType: "image/png", parents: ["folder-1"], modifiedTime: "t", size: "20" },
+        ],
+        nextPageToken: undefined,
       },
-    ];
-    let call = 0;
-    const client = makeClient(async () => pages[call++]);
+    ]);
+    const client = new DriveClient(tokenProvider);
 
     const files = await client.listFolder("folder-1");
 
     expect(files.map((f) => f.id)).toEqual(["a", "b"]);
     expect(files[0].size).toBe(10);
+    // Second page followed via pageToken.
+    expect(String(fetchMock.mock.calls[1][0])).toContain("pageToken=next");
+  });
+});
+
+describe("DriveClient.downloadFile", () => {
+  it("returns the raw bytes as a Uint8Array", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    const fn = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      arrayBuffer: async () => bytes.buffer,
+      text: async () => "",
+    }));
+    vi.stubGlobal("fetch", fn);
+    const client = new DriveClient(tokenProvider);
+
+    const out = await client.downloadFile("file-1");
+
+    expect(out).toBeInstanceOf(Uint8Array);
+    expect(Array.from(out)).toEqual([1, 2, 3, 4]);
+    expect(String(fn.mock.calls[0][0])).toContain("alt=media");
   });
 });

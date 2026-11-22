@@ -1,12 +1,10 @@
-import { google } from "googleapis";
 import { AiProvider, StructuredRequest } from "./provider";
+import { AccessTokenProvider, createGoogleAuth } from "../google-auth";
 
 const DEFAULT_MODEL = "gemini-2.5-flash";
 const CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
 
-export interface AccessTokenProvider {
-  getAccessToken(): Promise<string | null>;
-}
+export type { AccessTokenProvider };
 
 export interface VertexProviderOptions {
   projectId: string;
@@ -97,11 +95,5 @@ export class VertexProvider implements AiProvider {
 }
 
 function createServiceAccountTokenProvider(serviceAccountKey: string): AccessTokenProvider {
-  const auth = new google.auth.GoogleAuth({
-    credentials: JSON.parse(serviceAccountKey),
-    scopes: [CLOUD_PLATFORM_SCOPE],
-  });
-  return {
-    getAccessToken: async () => (await auth.getAccessToken()) ?? null,
-  };
+  return createGoogleAuth(serviceAccountKey, CLOUD_PLATFORM_SCOPE);
 }

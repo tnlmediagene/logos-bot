@@ -3,7 +3,8 @@ import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { AssetResolver } from "../../src/bot/asset-resolver";
-import { CatalogRepo, BrandRecord, AssetRecord } from "../../src/catalog/catalog-repo";
+import { CatalogRepo, BrandRecord, AssetRecord, AssetQuery } from "../../src/catalog/catalog-repo";
+import { CatalogReader } from "../../src/catalog/d1-catalog-repo";
 import { ConversationState } from "../../src/bot/conversation";
 
 function createTestDb(): Database.Database {
@@ -12,6 +13,21 @@ function createTestDb(): Database.Database {
   const schema = readFileSync(join(__dirname, "../../src/db/schema.sql"), "utf-8");
   db.exec(schema);
   return db;
+}
+
+/**
+ * Adapts the synchronous better-sqlite3 CatalogRepo to the async CatalogReader
+ * the resolver now depends on — lets these tests keep exercising real SQL
+ * queries (rather than a hand-rolled fake) against the async surface.
+ */
+function asReader(repo: CatalogRepo): CatalogReader {
+  return {
+    getBrandById: async (id) => repo.getBrandById(id),
+    getAllBrands: async () => repo.getAllBrands(),
+    getActiveAssets: async (brandId) => repo.getActiveAssets(brandId),
+    findAssets: async (query: AssetQuery) => repo.findAssets(query),
+    recordDelivery: async (row) => repo.recordDelivery(row),
+  };
 }
 
 describe("AssetResolver", () => {
@@ -80,13 +96,13 @@ describe("AssetResolver", () => {
   beforeEach(() => {
     db = createTestDb();
     repo = new CatalogRepo(db);
-    resolver = new AssetResolver(repo);
+    resolver = new AssetResolver(asReader(repo));
     repo.upsertBrand(brand);
     repo.upsertAsset(svgAsset);
     repo.upsertAsset(pngAsset);
   });
 
-  it("resolves asset matching brand, format, and color", () => {
+  it("resolves asset matching brand, format, and color", async () => {
     const state: ConversationState = {
       userId: "u1",
       channelId: "c1",
@@ -96,12 +112,12 @@ describe("AssetResolver", () => {
       step: "done",
       startedAt: "",
     };
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result?.asset.id).toBe("svg-blue");
     expect(result?.needsCustomSize).toBe(false);
   });
 
-  it("prefers SVG source for custom-size rendering", () => {
+  it("prefers SVG source for custom-size rendering", async () => {
     const state: ConversationState = {
       userId: "u1",
       channelId: "c1",
@@ -111,13 +127,13 @@ describe("AssetResolver", () => {
       step: "done",
       startedAt: "",
     };
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result?.asset.format).toBe("svg");
     expect(result?.needsCustomSize).toBe(true);
     expect(result?.requestedWidth).toBe(500);
   });
 
-  it("returns null when no assets match", () => {
+  it("returns null when no assets match", async () => {
     const state: ConversationState = {
       userId: "u1",
       channelId: "c1",
@@ -127,11 +143,11 @@ describe("AssetResolver", () => {
       step: "done",
       startedAt: "",
     };
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result).toBeNull();
   });
 
-  it("returns null without resolved brand", () => {
+  it("returns null without resolved brand", async () => {
     const state: ConversationState = {
       userId: "u1",
       channelId: "c1",
@@ -141,11 +157,11 @@ describe("AssetResolver", () => {
       step: "brand_select",
       startedAt: "",
     };
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result).toBeNull();
   });
 
-  it("carries the chosen background into ResolvedAsset", () => {
+  it("carries the chosen background into ResolvedAsset", async () => {
     const state: ConversationState = {
       userId: "u1",
       channelId: "c1",
@@ -155,18 +171,18 @@ describe("AssetResolver", () => {
       step: "done",
       startedAt: "",
     };
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result?.background).toBe("white");
   });
 
-  it("renders PNG output from the SVG source even at original size", () => {
+  it("renders PNG output from the SVG source even at original size", async () => {
     // Both svg-blue and png-blue exist; a PNG request must still come from SVG.
     const state = {
       userId: "u1", channelId: "c1",
       parsed: { brand: "TNL", format: "png", color: "blue", language: null, asset_type: null, layout: null, width: null, height: null, background: null, paddingRatio: null, raw_text: "" },
       resolvedBrandId: "the-news-lens", resolvedAssetId: null, step: "done", startedAt: "",
     } as unknown as ConversationState;
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     // PNG output at original size → render the SVG to PNG at its natural size
     // (never hand over the SVG file). Size is derived from the file at render
     // time, so it's a natural-png render, not a custom-size one.
@@ -175,7 +191,7 @@ describe("AssetResolver", () => {
     expect(result?.needsCustomSize).toBe(false);
   });
 
-  it("falls back to the stored PNG when no SVG exists for the variant", () => {
+  it("falls back to the stored PNG when no SVG exists for the variant", async () => {
     // A green PNG with no SVG counterpart.
     repo.upsertAsset({ ...pngAsset, id: "png-green", color: "green", source_drive_file_id: "fg" });
     const base = {
@@ -184,7 +200,7 @@ describe("AssetResolver", () => {
     };
 
     // Original size → direct download the PNG (no render).
-    const original = resolver.resolve({
+    const original = await resolver.resolve({
       ...base,
       parsed: { brand: "TNL", format: "png", color: "green", language: null, asset_type: null, layout: null, width: null, height: null, background: null, paddingRatio: null, raw_text: "" },
     } as unknown as ConversationState);
@@ -192,7 +208,7 @@ describe("AssetResolver", () => {
     expect(original?.needsCustomSize).toBe(false);
 
     // Custom size → render from the PNG fallback.
-    const custom = resolver.resolve({
+    const custom = await resolver.resolve({
       ...base,
       parsed: { brand: "TNL", format: "png", color: "green", language: null, asset_type: null, layout: null, width: 500, height: 500, background: null, paddingRatio: null, raw_text: "" },
     } as unknown as ConversationState);
@@ -200,7 +216,7 @@ describe("AssetResolver", () => {
     expect(custom?.needsCustomSize).toBe(true);
   });
 
-  it("returns .ai asset when custom size requested but only .ai available", () => {
+  it("returns .ai asset when custom size requested but only .ai available", async () => {
     // Add an .ai-only asset
     const aiAsset: AssetRecord = {
       id: "ai-blue",
@@ -237,7 +253,7 @@ describe("AssetResolver", () => {
       step: "done",
       startedAt: "",
     };
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result).not.toBeNull();
     expect(result?.asset.id).toBe("ai-blue");
     expect(result?.asset.format).toBe("ai");

@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { toBrandRecord, toAssetRecord } from "./row-mappers";
 
 export interface BrandRecord {
   id: string;
@@ -123,21 +124,21 @@ export class CatalogRepo {
         )`
       )
       .all({ pattern: `%${alias}%` }) as any[];
-    return rows.map(this.toBrandRecord);
+    return rows.map(toBrandRecord);
   }
 
   getBrandById(brandId: string): BrandRecord | null {
     const row = this.db
       .prepare(`SELECT * FROM brands WHERE id = @brandId`)
       .get({ brandId }) as any;
-    return row ? this.toBrandRecord(row) : null;
+    return row ? toBrandRecord(row) : null;
   }
 
   getAllBrands(): BrandRecord[] {
     const rows = this.db
       .prepare(`SELECT * FROM brands WHERE status = 'active'`)
       .all() as any[];
-    return rows.map(this.toBrandRecord);
+    return rows.map(toBrandRecord);
   }
 
   getActiveAssets(brandId: string): AssetRecord[] {
@@ -146,7 +147,7 @@ export class CatalogRepo {
         `SELECT * FROM assets WHERE brand_id = @brandId AND status = 'active' AND review_status = 'accepted'`
       )
       .all({ brandId }) as any[];
-    return rows.map(this.toAssetRecord);
+    return rows.map(toAssetRecord);
   }
 
   findAssets(query: AssetQuery): AssetRecord[] {
@@ -164,7 +165,7 @@ export class CatalogRepo {
     const rows = this.db
       .prepare(`SELECT * FROM assets WHERE ${conditions.join(" AND ")}`)
       .all(params) as any[];
-    return rows.map(this.toAssetRecord);
+    return rows.map(toAssetRecord);
   }
 
   /** Source state for every asset, for incremental scan diffing. Includes all
@@ -230,18 +231,5 @@ export class CatalogRepo {
     this.db
       .prepare("UPDATE scanner_runs SET status = 'completed', completed_at = datetime('now'), files_found = @filesFound WHERE id = @runId")
       .run({ runId, filesFound });
-  }
-
-  private toBrandRecord(row: any): BrandRecord {
-    return { ...row, aliases: JSON.parse(row.aliases) };
-  }
-
-  private toAssetRecord(row: any): AssetRecord {
-    return {
-      ...row,
-      usage: JSON.parse(row.usage),
-      inferred_from: JSON.parse(row.inferred_from),
-      can_resize: row.can_resize === 1,
-    };
   }
 }
