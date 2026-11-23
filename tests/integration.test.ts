@@ -7,7 +7,7 @@ import { CatalogReader } from "../src/catalog/d1-catalog-repo";
 import { ConversationManager } from "../src/bot/conversation";
 import { AssetResolver } from "../src/bot/asset-resolver";
 import { buildDeliveryMessage } from "../src/bot/response-builder";
-import { validateDimensions } from "../src/renderer/renderer";
+import { validateDimensions } from "../src/renderer/validate-dimensions";
 
 /** Async CatalogReader over the sync sqlite repo (see asset-resolver.test.ts). */
 function asReader(repo: CatalogRepo): CatalogReader {

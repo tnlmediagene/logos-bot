@@ -1,15 +1,19 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import sharp from "sharp";
 import { extractSvgDimensions, extractPngDimensions } from "../../src/scanner/file-metadata";
 
 const SVG_FIXTURE = join(__dirname, "../../fixtures/svgs/logo-blue.svg");
 const PNG_FIXTURE = join(__dirname, "../../fixtures/pngs/tnl-primary.png");
 
 beforeAll(async () => {
+  // The fixture is committed, so this normally never runs. `sharp` was removed
+  // from dependencies with the rest of the Node-only renderer — it's dynamically
+  // imported here, only on the (rare) regeneration path, so a normal test run
+  // never needs it installed. To regenerate: `pnpm add -D sharp` temporarily.
   if (!existsSync(PNG_FIXTURE)) {
     mkdirSync(join(__dirname, "../../fixtures/pngs"), { recursive: true });
+    const { default: sharp } = await import("sharp");
     const buf = await sharp({
       create: { width: 200, height: 80, channels: 4, background: { r: 0, g: 102, b: 204, alpha: 1 } },
     }).png().toBuffer();

@@ -24,11 +24,6 @@
     "src/bot/worker-audit.ts",
     "src/bot/kv-conversation-store.ts",
     "src/catalog/d1-catalog-repo.ts",
-    "src/renderer/worker-renderer.ts",
-    "src/index.ts",
-    "src/bot/app.ts",
-    "src/bot/commands.ts",
-    "src/bot/dm-handler.ts",
-    "src/bot/delivery.ts"
+    "src/renderer/worker-renderer.ts"
   ]
 }
