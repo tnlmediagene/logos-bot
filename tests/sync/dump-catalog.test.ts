@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import Database from "better-sqlite3";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { buildSyncSql, SCAN_OWNED_TABLES, RUNTIME_OWNED_TABLES } from "../../src/sync/dump-catalog";
+import { buildSyncSql, RUNTIME_OWNED_TABLES } from "../../src/sync/dump-catalog";
 
 const SCHEMA = readFileSync(join(__dirname, "../../migrations/0001_init.sql"), "utf-8");
 
@@ -31,6 +31,13 @@ function seedDb(): Database.Database {
   return db;
 }
 
+/** A target DB already migrated, with no data — the usual real-world starting point. */
+function freshTarget(): Database.Database {
+  const db = new Database(":memory:");
+  db.exec(SCHEMA);
+  return db;
+}
+
 describe("buildSyncSql", () => {
   let db: Database.Database;
   beforeEach(() => {
@@ -50,37 +57,44 @@ describe("buildSyncSql", () => {
     expect(sql).not.toMatch(/SAVEPOINT/i);
   });
 
-  it("resets every scan-owned table and inserts its rows", () => {
+  it("upserts scanner_runs/brands/assets by id instead of delete-then-reinsert", () => {
     const sql = buildSyncSql(db);
-    for (const t of SCAN_OWNED_TABLES) {
-      expect(sql).toContain(`DELETE FROM "${t}";`);
+    for (const t of ["scanner_runs", "brands", "assets"]) {
+      expect(sql).toContain(`INSERT INTO "${t}"`);
+      expect(sql).toContain(`ON CONFLICT("id") DO UPDATE SET`);
+      // Never a blanket delete of these — see the FK-safety test below for why.
+      expect(sql).not.toContain(`DELETE FROM "${t}";`);
     }
-    expect(sql).toContain(`INSERT INTO "brands"`);
-    expect(sql).toContain(`INSERT INTO "assets"`);
-    expect(sql).toContain(`INSERT INTO "scanner_runs"`);
-    expect(sql).toContain(`INSERT INTO "manual_overrides"`);
   });
 
-  it("never touches runtime-owned tables (audit log + render cache)", () => {
+  it("resets and reloads manual_overrides (no foreign key points at it)", () => {
     const sql = buildSyncSql(db);
-    for (const t of RUNTIME_OWNED_TABLES) {
-      expect(sql).not.toContain(`DELETE FROM "${t}";`);
-      expect(sql).not.toContain(`INSERT INTO "${t}"`);
-    }
+    expect(sql).toContain(`DELETE FROM "manual_overrides";`);
+    const insertLine = sql.split("\n").find((l) => l.startsWith(`INSERT INTO "manual_overrides"`));
+    expect(insertLine).toBeDefined();
+    // Plain insert, not an upsert — manual_overrides is fully reset first.
+    expect(insertLine).not.toContain("ON CONFLICT");
+  });
+
+  it("never touches the audit log, and only ever removes generated_outputs rows whose asset is gone", () => {
+    const sql = buildSyncSql(db);
+    expect(sql).not.toContain(`DELETE FROM "deliveries"`);
+    expect(sql).not.toContain(`INSERT INTO "deliveries"`);
     expect(sql).not.toContain("twitter post");
+    // generated_outputs IS referenced (to purge orphans), but never wiped
+    // outright, and the surviving asset's cache row is never touched.
+    expect(sql).not.toContain(`DELETE FROM "generated_outputs";`);
+    expect(sql).not.toContain(`INSERT INTO "generated_outputs"`);
     expect(sql).not.toContain("/cache/a1.png");
   });
 
-  it("deletes child→parent and inserts parent→child (FK-safe)", () => {
+  it("purges generated_outputs for a removed asset before deleting the asset itself", () => {
     const sql = buildSyncSql(db);
-    // DELETE assets must come before DELETE brands.
-    expect(sql.indexOf(`DELETE FROM "assets";`)).toBeLessThan(
-      sql.indexOf(`DELETE FROM "brands";`)
-    );
-    // INSERT brands must come before INSERT assets.
-    expect(sql.indexOf(`INSERT INTO "brands"`)).toBeLessThan(
-      sql.indexOf(`INSERT INTO "assets"`)
-    );
+    const purgeIdx = sql.indexOf(`DELETE FROM "generated_outputs" WHERE "source_asset_id" NOT IN`);
+    const assetsDeleteIdx = sql.indexOf(`DELETE FROM "assets" WHERE "id" NOT IN`);
+    expect(purgeIdx).toBeGreaterThanOrEqual(0);
+    expect(assetsDeleteIdx).toBeGreaterThanOrEqual(0);
+    expect(purgeIdx).toBeLessThan(assetsDeleteIdx);
   });
 
   it("escapes single quotes and preserves unicode / JSON strings", () => {
@@ -94,8 +108,7 @@ describe("buildSyncSql", () => {
 
   it("applies cleanly against a fresh migrated DB and reproduces the data", () => {
     const sql = buildSyncSql(db);
-    const target = new Database(":memory:");
-    target.exec(SCHEMA);
+    const target = freshTarget();
     // Pre-existing audit row that must survive (sync doesn't touch deliveries).
     target.prepare("INSERT INTO deliveries (slack_user_id, purpose) VALUES ('keep', 'old')").run();
     target.exec(sql);
@@ -109,12 +122,87 @@ describe("buildSyncSql", () => {
 
   it("is idempotent — applying twice yields the same row counts", () => {
     const sql = buildSyncSql(db);
-    const target = new Database(":memory:");
-    target.exec(SCHEMA);
+    const target = freshTarget();
     target.exec(sql);
     target.exec(sql);
     expect((target.prepare("SELECT COUNT(*) c FROM brands").get() as { c: number }).c).toBe(1);
     expect((target.prepare("SELECT COUNT(*) c FROM assets").get() as { c: number }).c).toBe(1);
     target.close();
+  });
+
+  // Regression coverage for the bug a Copilot PR review caught (and this
+  // repo's own first real `sync:d1:remote` run against production
+  // reproduced): the original delete-then-reinsert design failed outright
+  // the moment any `generated_outputs` row existed, because D1's remote exec
+  // endpoint runs each statement without a wrapping transaction, so
+  // `PRAGMA defer_foreign_keys` had nothing to defer *within*.
+  describe("generated_outputs foreign key safety", () => {
+    it("does not touch (or break) a cache row for an asset that still exists", () => {
+      const sql = buildSyncSql(db); // db's only asset, 'a1', has a cache row.
+      const target = freshTarget();
+      // The SAME asset already exists in the target, with the SAME cache row
+      // a real render would have produced — the exact scenario that crashed.
+      target.prepare("INSERT INTO brands (id, display_name, aliases) VALUES ('tnl', 'TNL', '[]')").run();
+      target
+        .prepare(
+          `INSERT INTO assets (id, brand_id, asset_type, variant, format, usage, source_drive_file_id, source_path, inferred_from, scanner_run_id)
+           VALUES ('a1', 'tnl', 'logo', 'primary', 'svg', '["general"]', 'file1', '/p/a1.svg', '[]', NULL)`
+        )
+        .run();
+      target
+        .prepare(
+          `INSERT INTO generated_outputs (source_asset_id, requested_width, requested_height, file_path)
+           VALUES ('a1', 100, 50, '/cache/a1.png')`
+        )
+        .run();
+
+      expect(() => target.exec(sql)).not.toThrow();
+
+      expect((target.prepare("SELECT COUNT(*) c FROM assets").get() as { c: number }).c).toBe(1);
+      // The cache row survived untouched — the asset was updated in place,
+      // never deleted, so the foreign key was never broken.
+      const cache = target.prepare("SELECT * FROM generated_outputs").get() as any;
+      expect(cache.source_asset_id).toBe("a1");
+      expect(cache.file_path).toBe("/cache/a1.png");
+    });
+
+    it("purges a cache row when its asset is genuinely removed from the scan", () => {
+      // The new scan no longer has 'a1' at all (e.g. the file was deleted/renamed).
+      db.prepare("DELETE FROM generated_outputs").run();
+      db.prepare("DELETE FROM manual_overrides").run();
+      db.prepare("DELETE FROM assets").run();
+      db.prepare(
+        `INSERT INTO assets (id, brand_id, asset_type, variant, format, usage, source_drive_file_id, source_path, inferred_from, scanner_run_id)
+         VALUES ('a2', 'tnl', 'logo', 'primary', 'svg', '["general"]', 'file2', '/p/a2.svg', '[]', 1)`
+      ).run();
+      const sql = buildSyncSql(db);
+
+      const target = freshTarget();
+      target.prepare("INSERT INTO brands (id, display_name, aliases) VALUES ('tnl', 'TNL', '[]')").run();
+      target
+        .prepare(
+          `INSERT INTO assets (id, brand_id, asset_type, variant, format, usage, source_drive_file_id, source_path, inferred_from, scanner_run_id)
+           VALUES ('a1', 'tnl', 'logo', 'primary', 'svg', '["general"]', 'file1', '/p/a1.svg', '[]', NULL)`
+        )
+        .run();
+      target
+        .prepare(
+          `INSERT INTO generated_outputs (source_asset_id, requested_width, requested_height, file_path)
+           VALUES ('a1', 100, 50, '/cache/a1.png')`
+        )
+        .run();
+
+      expect(() => target.exec(sql)).not.toThrow();
+
+      // 'a1' and its orphaned cache row are both gone; 'a2' (the new asset) exists.
+      expect(target.prepare("SELECT id FROM assets").all()).toEqual([{ id: "a2" }]);
+      expect((target.prepare("SELECT COUNT(*) c FROM generated_outputs").get() as { c: number }).c).toBe(0);
+    });
+  });
+});
+
+describe("RUNTIME_OWNED_TABLES", () => {
+  it("still names deliveries and generated_outputs as never-wiped tables", () => {
+    expect(RUNTIME_OWNED_TABLES).toEqual(["deliveries", "generated_outputs"]);
   });
 });
