@@ -35,7 +35,7 @@ export default {
       return Response.json({
         service: "logos-bot",
         stage: "oauth",
-        ok: bindings.db && bindings.conversations && bindings.installations,
+        ok: bindings.db && bindings.conversations && bindings.installations && bindings.images,
         bindings,
       });
     }
