@@ -8,6 +8,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck:worker": "tsc -p tsconfig.worker.json",
+    "lint": "eslint .",
     "cf-typegen": "wrangler types",
     "db:migrate:local": "wrangler d1 migrations apply logos-bot-catalog --local",
     "db:migrate:remote": "wrangler d1 migrations apply logos-bot-catalog --remote",
@@ -33,6 +34,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260930.2",
+    "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^26.1.0",
     "@typescript-eslint/eslint-plugin": "^8.62.1",

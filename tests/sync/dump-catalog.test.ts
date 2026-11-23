@@ -89,7 +89,7 @@ describe("buildSyncSql", () => {
     ).run();
     const sql = buildSyncSql(db);
     expect(sql).toContain("'O''Reilly 名字'");
-    expect(sql).toContain('[\"a\",\"b\"]'.replace(/"/g, '"')); // JSON kept verbatim
+    expect(sql).toContain('["a","b"]'); // JSON kept verbatim
   });
 
   it("applies cleanly against a fresh migrated DB and reproduces the data", () => {

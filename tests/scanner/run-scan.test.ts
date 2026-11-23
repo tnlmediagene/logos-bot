@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
-import { readFileSync } from "fs";
+import { readFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { runFullScan } from "../../src/scanner/run-scan";
 import { DriveClient, DriveFile } from "../../src/scanner/drive-client";
@@ -137,7 +137,7 @@ describe("runFullScan incremental", () => {
   beforeEach(() => {
     db = createTestDb();
     outputDir = join(process.env.TMPDIR || "/tmp", `logos-scan-test-${Math.random().toString(36).slice(2)}`);
-    require("fs").mkdirSync(outputDir, { recursive: true });
+    mkdirSync(outputDir, { recursive: true });
   });
 
   it("first scan processes every file and calls AI once per file", async () => {
