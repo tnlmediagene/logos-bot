@@ -55,12 +55,8 @@
   // but it's set as a secret here too, so it must NOT also appear as a var:
   // a name can't be both at once.)
   "vars": {
-    "AI_PROVIDER": "vertex",
-    "GEMINI_MODEL": "gemini-2.5-flash",
     "MAX_OUTPUT_SIZE": "4096",
     "DRIVE_ROOT_FOLDER_ID": "1Y6avk_W5jRsl5Ab-PWiBvOo_AFGoFEv2",
-    "VERTEX_PROJECT_ID": "logos-bot-515608",
-    "VERTEX_LOCATION": "us-central1",
     "AUDIT_NOTIFY_CHANNELS": "",
 
     // --- OAuth app-installation (SlackOAuthApp) ---

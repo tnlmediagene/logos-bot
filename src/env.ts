@@ -19,12 +19,8 @@ export interface Env {
   IMAGES: ImagesBinding; // Cloudflare Images: custom-size render (resize + bg)
 
   // --- Non-secret vars (wrangler.jsonc [vars]) ---
-  AI_PROVIDER: string;
-  GEMINI_MODEL: string;
   MAX_OUTPUT_SIZE: string;
   DRIVE_ROOT_FOLDER_ID: string;
-  VERTEX_PROJECT_ID: string;
-  VERTEX_LOCATION: string;
   AUDIT_NOTIFY_CHANNELS: string;
   // OAuth app-installation flow (slack-edge's SlackOAuthEnv shape).
   SLACK_BOT_SCOPES: string;
