@@ -28,10 +28,19 @@
   // KV — replaces the in-memory ConversationStore (per-user dialog state, TTL'd).
   // Create with:  wrangler kv namespace create CONVERSATIONS
   // then paste the returned id below.
+  //
+  // INSTALLATIONS — multi-workspace OAuth installs (bot token per team), via
+  // KVInstallationStore. Separate from CONVERSATIONS: installs persist
+  // indefinitely, conversation state doesn't.
+  // Create with:  wrangler kv namespace create INSTALLATIONS
   "kv_namespaces": [
     {
       "binding": "CONVERSATIONS",
       "id": "9b734636eac04572bc3183c33b55fc83"
+    },
+    {
+      "binding": "INSTALLATIONS",
+      "id": "REPLACE_WITH_INSTALLATIONS_KV_NAMESPACE_ID"
     }
   ],
 
@@ -39,8 +48,12 @@
   // Used only on custom-size renders; the SVG natural-PNG path is pure WASM.
   "images": { "binding": "IMAGES" },
 
-  // Non-secret configuration. Secrets (SLACK_BOT_TOKEN, SLACK_SIGNING_SECRET,
-  // GOOGLE_SERVICE_ACCOUNT_KEY) are injected via `wrangler secret put`.
+  // Non-secret configuration. Secrets (SLACK_SIGNING_SECRET, SLACK_CLIENT_ID,
+  // SLACK_CLIENT_SECRET, GOOGLE_SERVICE_ACCOUNT_KEY, and the now-optional
+  // SLACK_BOT_TOKEN fallback) are injected via `wrangler secret put`.
+  // (SLACK_CLIENT_ID isn't actually secret — it's visible in the install URL —
+  // but it's set as a secret here too, so it must NOT also appear as a var:
+  // a name can't be both at once.)
   "vars": {
     "AI_PROVIDER": "vertex",
     "GEMINI_MODEL": "gemini-2.5-flash",
@@ -48,6 +61,14 @@
     "DRIVE_ROOT_FOLDER_ID": "1Y6avk_W5jRsl5Ab-PWiBvOo_AFGoFEv2",
     "VERTEX_PROJECT_ID": "logos-bot-515608",
     "VERTEX_LOCATION": "us-central1",
-    "AUDIT_NOTIFY_CHANNELS": ""
+    "AUDIT_NOTIFY_CHANNELS": "",
+
+    // --- OAuth app-installation (SlackOAuthApp) ---
+    // Comma-separated bot scopes requested on install. Must match (or be a
+    // subset of) what the Slack App's OAuth & Permissions page has configured.
+    "SLACK_BOT_SCOPES": "chat:write,files:write,im:history",
+    // Must exactly match a Redirect URL registered on the Slack App's
+    // OAuth & Permissions page.
+    "SLACK_REDIRECT_URI": "https://logos-bot.thenewslens.workers.dev/slack/oauth_redirect"
   }
 }

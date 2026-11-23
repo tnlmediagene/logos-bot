@@ -1,4 +1,4 @@
-import { SlackApp } from "slack-cloudflare-workers";
+import { SlackOAuthApp, KVInstallationStore } from "slack-cloudflare-workers";
 import type { Env } from "./env";
 import brandsConfig from "../config/brands.json";
 import { D1CatalogRepo } from "./catalog/d1-catalog-repo";
@@ -88,8 +88,18 @@ function buildPorts(
 /**
  * Build the Slack app for the Worker.
  *
- * Uses `slack-cloudflare-workers`' `SlackApp` in bot-token mode. The framework
- * handles URL verification + request-signature verification inside `app.run()`.
+ * Uses `slack-cloudflare-workers`' `SlackOAuthApp` so any workspace in the
+ * TNL Mediagene family can self-install via `/slack/install` rather than
+ * needing a hand-set `SLACK_BOT_TOKEN` per workspace. Every installed
+ * workspace's bot token lives in `env.INSTALLATIONS` (KV, via
+ * `KVInstallationStore`) and `authorize()` resolves the right one per
+ * request — the framework handles URL verification + request-signature
+ * verification inside `app.run()`, and OAuth install/callback, the same way.
+ *
+ * All installed workspaces share the SAME catalog (D1 + Drive) — this bot is
+ * for TNL Mediagene's own brand assets across its own workspaces, not a
+ * multi-tenant product; OAuth here is self-install convenience, not data
+ * isolation between unrelated orgs.
  *
  * Two listeners drive the guided flow:
  *  - `app.message` handles free-text DM replies (brand name, purpose, custom
@@ -104,10 +114,14 @@ function buildPorts(
  * notice) and the action's lazy handler run via `ctx.waitUntil(...)`, never
  * delaying or failing the user's turn.
  */
-export function createSlackApp(env: Env, ctx?: ExecutionContext): SlackApp<Env> {
-  const app = new SlackApp({
+export function createSlackApp(env: Env, ctx?: ExecutionContext): SlackOAuthApp<Env> {
+  const app = new SlackOAuthApp({
     env,
-    routes: { events: "/slack/events" },
+    installationStore: new KVInstallationStore(env, env.INSTALLATIONS),
+    routes: {
+      events: "/slack/events",
+      oauth: { start: "/slack/install", callback: "/slack/oauth_redirect" },
+    },
   });
 
   const notifyChannels = parseNotifyChannels(env.AUDIT_NOTIFY_CHANNELS);

@@ -26,6 +26,11 @@
     "slack-cloudflare-workers": "^1.3.6",
     "svg2png-wasm": "1.4.1"
   },
+  "pnpm": {
+    "overrides": {
+      "@cloudflare/workers-types": "^5.20260930.2"
+    }
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260930.2",
     "@types/better-sqlite3": "^7.6.13",
