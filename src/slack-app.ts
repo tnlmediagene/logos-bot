@@ -8,12 +8,33 @@ import { BrandMatcher } from "./bot/brand-matcher";
 import { RequestParser } from "./bot/request-parser";
 import { ConversationManager } from "./bot/conversation";
 import { DriveClient } from "./scanner/drive-client";
-import { createGoogleAuth } from "./google-auth";
+import { createGoogleAuth, AccessTokenProvider } from "./google-auth";
 import { handleMessage, handleBlockAction, MessageDeps, MessagePorts } from "./bot/worker-message-handler";
 import { createWorkerAuditSink, AuditEvent } from "./bot/worker-audit";
 import type { SlackMessage } from "./bot/response-builder";
 
 const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+/**
+ * `createGoogleAuth` providers cache their minted access token in memory
+ * until shortly before it expires (see google-auth.ts) — but that cache is
+ * only useful if the SAME provider instance is reused across requests.
+ * `buildDeps` runs on every inbound message/action, so a module-level cache
+ * keyed by (scope, key) lets every request in this isolate share one
+ * provider instead of re-minting a fresh Google OAuth token from scratch on
+ * every single Slack message.
+ */
+const googleAuthProviders = new Map<string, AccessTokenProvider>();
+
+export function getGoogleAuth(serviceAccountKey: string, scope: string): AccessTokenProvider {
+  const cacheKey = `${scope}\u0000${serviceAccountKey}`;
+  let provider = googleAuthProviders.get(cacheKey);
+  if (!provider) {
+    provider = createGoogleAuth(serviceAccountKey, scope);
+    googleAuthProviders.set(cacheKey, provider);
+  }
+  return provider;
+}
 
 /** Comma/space-separated reviewer channel list → trimmed non-empty entries. */
 function parseNotifyChannels(raw: string | undefined): string[] {
@@ -31,7 +52,7 @@ async function buildDeps(env: Env): Promise<{ deps: MessageDeps; repo: D1Catalog
   const repo = new D1CatalogRepo(env.DB);
   const conversations = new KvConversationStore(env.CONVERSATIONS);
   const driveClient = new DriveClient(
-    createGoogleAuth(env.GOOGLE_SERVICE_ACCOUNT_KEY, DRIVE_SCOPE)
+    getGoogleAuth(env.GOOGLE_SERVICE_ACCOUNT_KEY, DRIVE_SCOPE)
   );
 
   const allBrands = await repo.getAllBrands();
