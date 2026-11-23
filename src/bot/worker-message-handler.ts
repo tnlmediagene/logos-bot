@@ -45,18 +45,21 @@ export interface MessageDeps {
 /**
  * KV conversation state is shared by every OAuth-installed workspace in one
  * namespace, but a Slack user id is only unique *within* its own workspace —
- * two different teams can mint the same literal id. Scoping the KV key by
- * team prevents one workspace's in-progress conversation from being read or
- * overwritten by another's.
+ * two different teams can mint the same literal id, and even within one
+ * workspace the same person can have more than one active conversation
+ * surface with the bot at once (their 1:1 DM plus a group DM they share with
+ * it, for example). Scoping the KV key by team AND channel prevents any of
+ * those from reading or overwriting each other's in-progress conversation.
  */
-function conversationKey(teamId: string, userId: string): string {
-  return `${teamId}:${userId}`;
+function conversationKey(teamId: string, channelId: string, userId: string): string {
+  return `${teamId}:${channelId}:${userId}`;
 }
 
 /**
  * Handle one inbound DM text, driving the guided flow: parse → (brand/attribute
  * questions) → resolve → deliver. State lives in KV between turns, keyed by
- * `teamId:userId` (see `conversationKey`) so installs never cross-talk.
+ * `teamId:channelId:userId` (see `conversationKey`) so installs — and
+ * different conversation surfaces for the same person — never cross-talk.
  *
  * Delivery handles all three paths: direct download (SVG/AI/PNG as-is), natural
  * PNG (svg2png-wasm), and custom size (svg2png-wasm, no Cloudflare Images).
@@ -65,11 +68,12 @@ export async function handleMessage(
   text: string,
   userId: string,
   teamId: string,
+  channelId: string,
   deps: MessageDeps,
   ports: MessagePorts
 ): Promise<void> {
   const { parser, conversationManager, conversations } = deps;
-  const key = conversationKey(teamId, userId);
+  const key = conversationKey(teamId, channelId, userId);
 
   const pendingState = await conversations.get(key);
 
@@ -139,13 +143,14 @@ export async function handleMessage(
 export async function handleBlockAction(
   userId: string,
   teamId: string,
+  channelId: string,
   actionId: string,
   value: string,
   deps: MessageDeps,
   ports: MessagePorts
 ): Promise<void> {
   const { conversationManager, conversations } = deps;
-  const key = conversationKey(teamId, userId);
+  const key = conversationKey(teamId, channelId, userId);
 
   if (typeof value !== "string" || !actionId.startsWith("select_")) return;
   // action_id is `select_${field}_${value}`. Field names contain underscores

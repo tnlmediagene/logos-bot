@@ -131,9 +131,11 @@ export function createSlackApp(env: Env, ctx?: ExecutionContext): SlackOAuthApp<
     const userId = payload.user;
     const channelId = payload.channel;
     if (!text || !userId || !channelId) return;
-    // Scope conversation state by installed team — see conversationKey() in
-    // worker-message-handler.ts. Every installed workspace shares one KV
-    // namespace, and Slack user ids are only unique within their own team.
+    // Scope conversation state by installed team + channel — see
+    // conversationKey() in worker-message-handler.ts. Every installed
+    // workspace shares one KV namespace, Slack user ids are only unique
+    // within their own team, and the same person can have more than one
+    // conversation surface (channel) open with the bot at once.
     const teamId = context.authorizeResult.teamId ?? context.authorizeResult.enterpriseId ?? "unknown-team";
 
     const { deps, repo } = await buildDeps(env);
@@ -146,7 +148,7 @@ export function createSlackApp(env: Env, ctx?: ExecutionContext): SlackOAuthApp<
       ctx
     );
 
-    await handleMessage(text, userId, teamId, deps, ports);
+    await handleMessage(text, userId, teamId, channelId, deps, ports);
   });
 
   // The question buttons `buildQuestionMessage` renders (response-builder.ts)
@@ -176,7 +178,7 @@ export function createSlackApp(env: Env, ctx?: ExecutionContext): SlackOAuthApp<
         ctx
       );
 
-      await handleBlockAction(userId, teamId, actionId, value, deps, ports);
+      await handleBlockAction(userId, teamId, channelId, actionId, value, deps, ports);
     }
   );
 

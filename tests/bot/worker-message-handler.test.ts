@@ -83,7 +83,8 @@ function seedPurposeState(brandId: string) {
 }
 
 const TEAM = "T_TEAM1";
-const KEY = `${TEAM}:u1`;
+const CHANNEL = "C_CHANNEL1";
+const KEY = `${TEAM}:${CHANNEL}:u1`;
 
 function makeConversations() {
   const store = new Map<string, any>();
@@ -114,7 +115,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
 
-    await handleMessage("TNL logo", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
+    await handleMessage("TNL logo", "u1", TEAM, CHANNEL, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     // No delivery on the first turn — a guided question is asked and state saved.
     expect(ports.uploads).toHaveLength(0);
@@ -132,9 +133,9 @@ describe("handleMessage (Worker pipeline)", () => {
     const d = deps(repo, resolver, fakeParser("tnl", "svg"), conversations);
 
     // Turn 1: fresh request → purpose question.
-    await handleMessage("TNL svg logo", "u1", TEAM, d, ports);
+    await handleMessage("TNL svg logo", "u1", TEAM, CHANNEL, d, ports);
     // Turn 2: the purpose reply resolves + delivers.
-    await handleMessage("放在官網首頁", "u1", TEAM, d, ports);
+    await handleMessage("放在官網首頁", "u1", TEAM, CHANNEL, d, ports);
 
     expect(ports.uploads).toHaveLength(1);
     expect(ports.uploads[0].filename).toBe("logo-blue.svg");
@@ -159,7 +160,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const ports = makePorts();
     await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("1200x630", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
+    await handleMessage("1200x630", "u1", TEAM, CHANNEL, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     // Rendered PNG uploaded with a .png filename (the mocked renderer's bytes).
     expect(ports.uploads).toHaveLength(1);
@@ -184,7 +185,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const ports = makePorts();
     await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("99999x99999", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
+    await handleMessage("99999x99999", "u1", TEAM, CHANNEL, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     expect(ports.uploads).toHaveLength(0);
     expect(ports.said.some((m) => /4096|超過/.test(m.text || ""))).toBe(true);
@@ -196,7 +197,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
 
-    await handleMessage("給我 logo", "u1", TEAM, deps(repo, resolver, fakeParser(null), conversations), ports);
+    await handleMessage("給我 logo", "u1", TEAM, CHANNEL, deps(repo, resolver, fakeParser(null), conversations), ports);
 
     expect(ports.uploads).toHaveLength(0);
     expect(conversations.set).toHaveBeenCalled();
@@ -210,7 +211,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const ports = makePorts();
     await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("放在官網", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
+    await handleMessage("放在官網", "u1", TEAM, CHANNEL, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     expect(ports.uploads).toHaveLength(0);
     expect(ports.said.some((m) => /找不到/.test(m.text || ""))).toBe(true);
@@ -242,7 +243,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     });
 
     await handleBlockAction(
-      "u1", TEAM, "select_format_svg", "svg",
+      "u1", TEAM, CHANNEL, "select_format_svg", "svg",
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -259,7 +260,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const ports = makePorts();
 
     await handleBlockAction(
-      "u1", TEAM, "select_format_svg", "svg",
+      "u1", TEAM, CHANNEL, "select_format_svg", "svg",
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -280,7 +281,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     });
 
     await handleBlockAction(
-      "u1", TEAM, "select_color_blue", "blue",
+      "u1", TEAM, CHANNEL, "select_color_blue", "blue",
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -295,7 +296,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const ports = makePorts();
 
     await handleBlockAction(
-      "u1", TEAM, "select_format_svg", undefined as any,
+      "u1", TEAM, CHANNEL, "select_format_svg", undefined as any,
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -313,14 +314,33 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const portsB = makePorts();
 
     // Team A starts a guided flow for "u1" (asks a question, persists state).
-    await handleMessage("TNL logo", "u1", "T_TEAMA", deps(repo, resolver, fakeParser("tnl"), conversations), portsA);
+    await handleMessage("TNL logo", "u1", "T_TEAMA", CHANNEL, deps(repo, resolver, fakeParser("tnl"), conversations), portsA);
     // Team B's "u1" (a different, unrelated person) starts completely fresh.
-    await handleMessage("TNL logo", "u1", "T_TEAMB", deps(repo, resolver, fakeParser("tnl"), conversations), portsB);
+    await handleMessage("TNL logo", "u1", "T_TEAMB", CHANNEL, deps(repo, resolver, fakeParser("tnl"), conversations), portsB);
 
     // Each team's state lives under its own key — neither overwrote the other.
-    expect(await conversations.get("T_TEAMA:u1")).toBeDefined();
-    expect(await conversations.get("T_TEAMB:u1")).toBeDefined();
-    expect(conversations.set).toHaveBeenCalledWith("T_TEAMA:u1", expect.anything());
-    expect(conversations.set).toHaveBeenCalledWith("T_TEAMB:u1", expect.anything());
+    expect(await conversations.get(`T_TEAMA:${CHANNEL}:u1`)).toBeDefined();
+    expect(await conversations.get(`T_TEAMB:${CHANNEL}:u1`)).toBeDefined();
+    expect(conversations.set).toHaveBeenCalledWith(`T_TEAMA:${CHANNEL}:u1`, expect.anything());
+    expect(conversations.set).toHaveBeenCalledWith(`T_TEAMB:${CHANNEL}:u1`, expect.anything());
+  });
+
+  it("does not leak conversation state between two channels for the same team and user", async () => {
+    // Same team + same Slack user id, but two different conversation
+    // surfaces (e.g. their 1:1 DM vs. a group DM they share with the bot) —
+    // each must get its own independent state.
+    const repo = fakeRepo([makeAsset({ format: "svg" })]);
+    const resolver = new AssetResolver(repo as any);
+    const conversations = makeConversations();
+    const portsA = makePorts();
+    const portsB = makePorts();
+
+    await handleMessage("TNL logo", "u1", TEAM, "C_CHANNELA", deps(repo, resolver, fakeParser("tnl"), conversations), portsA);
+    await handleMessage("TNL logo", "u1", TEAM, "C_CHANNELB", deps(repo, resolver, fakeParser("tnl"), conversations), portsB);
+
+    expect(await conversations.get(`${TEAM}:C_CHANNELA:u1`)).toBeDefined();
+    expect(await conversations.get(`${TEAM}:C_CHANNELB:u1`)).toBeDefined();
+    expect(conversations.set).toHaveBeenCalledWith(`${TEAM}:C_CHANNELA:u1`, expect.anything());
+    expect(conversations.set).toHaveBeenCalledWith(`${TEAM}:C_CHANNELB:u1`, expect.anything());
   });
 });

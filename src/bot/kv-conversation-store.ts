@@ -16,9 +16,12 @@ const CONVERSATION_TTL_SECONDS = 30 * 60;
  * `key` is a full lookup key, not a bare Slack user id: with multi-workspace
  * OAuth installs sharing this one namespace, a plain user id isn't unique —
  * Slack mints ids independently per workspace, so two different teams can
- * mint the same literal id. Callers (`worker-message-handler.ts`) scope the
- * key by team before calling in, so one workspace's in-progress conversation
- * can never be read or overwritten by another's.
+ * mint the same literal id, and even within one team the same person can
+ * have more than one conversation surface with the bot open at once (their
+ * 1:1 DM plus a group DM they share with it, for example). Callers
+ * (`worker-message-handler.ts`'s `conversationKey()`) scope the key by team
+ * AND channel before calling in, so none of those can read or overwrite
+ * another's in-progress conversation.
  *
  * The interface mirrors `ConversationStore` but is async (KV is a Promise API).
  */
