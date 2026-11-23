@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { handleMessage, MessageDeps, MessagePorts } from "../../src/bot/worker-message-handler";
+import { handleMessage, handleBlockAction, MessageDeps, MessagePorts } from "../../src/bot/worker-message-handler";
 import { ConversationManager } from "../../src/bot/conversation";
 import { AssetResolver, ResolvedAsset } from "../../src/bot/asset-resolver";
 import { AssetRecord, BrandRecord } from "../../src/catalog/catalog-repo";
@@ -227,5 +227,91 @@ describe("handleMessage (Worker pipeline)", () => {
 
     expect(ports.uploads).toHaveLength(0);
     expect(ports.said.some((m) => /找不到/.test(m.text || ""))).toBe(true);
+  });
+});
+
+describe("handleBlockAction (select_ button clicks)", () => {
+  it("applies the answer and asks the next question, persisting state", async () => {
+    // Two colors so, after picking a format, the color question is still open.
+    const assets = [
+      makeAsset({ id: "a1", format: "svg", color: "blue" }),
+      makeAsset({ id: "a2", format: "svg", color: "white" }),
+    ];
+    const repo = fakeRepo(assets);
+    const resolver = new AssetResolver(repo as any);
+    const conversations = makeConversations();
+    const ports = makePorts();
+    // Mid-flow: brand resolved, nothing else answered yet.
+    await conversations.set("u1", {
+      userId: "u1", channelId: "", resolvedBrandId: "tnl", resolvedAssetId: null,
+      awaitingCustomSize: false, awaitingPurpose: false, sizeResolved: false,
+      backgroundResolved: false, purpose: null, purposeUrl: null,
+      step: "format_select", startedAt: "2026-10-01T00:00:00.000Z",
+      parsed: {
+        brand: "tnl", brandCandidates: ["tnl"], format: null, color: null,
+        language: null, asset_type: null, layout: null, background: null,
+        width: null, height: null, paddingRatio: null, raw_text: "x",
+      },
+    });
+
+    await handleBlockAction(
+      "u1", "select_format_svg", "svg",
+      deps(repo, resolver, fakeParser("tnl"), conversations), ports
+    );
+
+    expect(ports.uploads).toHaveLength(0);
+    expect(conversations.set).toHaveBeenCalled();
+    // Next question should be about color (two colors remain for svg).
+    expect(ports.said[0].text).toMatch(/顏色/);
+  });
+
+  it("reports the conversation expired when no state is pending", async () => {
+    const repo = fakeRepo([]);
+    const resolver = new AssetResolver(repo as any);
+    const conversations = makeConversations();
+    const ports = makePorts();
+
+    await handleBlockAction(
+      "u1", "select_format_svg", "svg",
+      deps(repo, resolver, fakeParser("tnl"), conversations), ports
+    );
+
+    expect(ports.said.some((m) => /對話已過期/.test(m.text || ""))).toBe(true);
+  });
+
+  it("reports no-match when the last answer leaves zero assets", async () => {
+    const repo = fakeRepo([]); // findAssets/getActiveAssets return nothing
+    const resolver = new AssetResolver(repo as any);
+    const conversations = makeConversations();
+    const ports = makePorts();
+    // Purpose already answered; only the color pick is left (and that leads
+    // nowhere, since no assets exist at all).
+    await conversations.set("u1", {
+      ...seedPurposeState("tnl"),
+      awaitingPurpose: false,
+      purpose: "social post",
+    });
+
+    await handleBlockAction(
+      "u1", "select_color_blue", "blue",
+      deps(repo, resolver, fakeParser("tnl"), conversations), ports
+    );
+
+    expect(ports.uploads).toHaveLength(0);
+    expect(ports.said.some((m) => /找不到/.test(m.text || ""))).toBe(true);
+  });
+
+  it("ignores a malformed action (missing value) without throwing", async () => {
+    const repo = fakeRepo([]);
+    const resolver = new AssetResolver(repo as any);
+    const conversations = makeConversations();
+    const ports = makePorts();
+
+    await handleBlockAction(
+      "u1", "select_format_svg", undefined as any,
+      deps(repo, resolver, fakeParser("tnl"), conversations), ports
+    );
+
+    expect(ports.said).toHaveLength(0);
   });
 });

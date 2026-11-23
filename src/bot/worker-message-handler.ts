@@ -1,8 +1,8 @@
 import { RequestParser } from "./request-parser";
-import { ConversationManager } from "./conversation";
+import { ConversationManager, ConversationState } from "./conversation";
 import { KvConversationStore } from "./kv-conversation-store";
 import { AssetResolver, ResolvedAsset } from "./asset-resolver";
-import { CatalogReader } from "../catalog/d1-catalog-repo";
+import { CatalogReader } from "../catalog/catalog-reader";
 import { DriveClient } from "../scanner/drive-client";
 import {
   renderSvgNatural,
@@ -11,6 +11,7 @@ import {
   ImagesBindingLike,
 } from "../renderer/worker-renderer";
 import { buildQuestionMessage, buildErrorMessage, buildDeliveryMessage, buildWhiteLogoWarning, SlackMessage } from "./response-builder";
+import { buildNoMatchMessage } from "./worker-no-match";
 import { AuditEvent } from "./worker-audit";
 
 /**
@@ -57,25 +58,38 @@ export async function handleMessage(
   deps: MessageDeps,
   ports: MessagePorts
 ): Promise<void> {
-  const { parser, conversationManager, conversations, resolver, repo, driveClient } = deps;
+  const { parser, conversationManager, conversations } = deps;
 
   const pendingState = await conversations.get(userId);
 
-  // --- Awaiting the mandatory purpose reply: apply, then resolve + deliver. ---
+  // --- Awaiting the mandatory purpose reply. Purpose is unconditionally the
+  // LAST gate `getNextQuestion` ever asks (see conversation.ts), so once it's
+  // answered there is nothing left to ask — go straight to resolve. ---
   if (pendingState?.awaitingPurpose) {
     const state = conversationManager.applyPurposeInput(pendingState, text);
     if (!state) {
       await ports.say(buildErrorMessage("請簡述這個 Logo 的用途（若有連結可直接貼上網址）才能取得檔案。"));
       return;
     }
-    const result = await resolver.resolve(state);
-    if (!result) {
-      await conversations.delete(userId);
-      await ports.say(await buildNoMatch(state.resolvedBrandId, repo));
+    await resolveOrNoMatch(state, userId, deps, ports);
+    return;
+  }
+
+  // --- Awaiting a free-text custom size reply (e.g. "800x600"). A later
+  // question (background) may still follow, so check before resolving. ---
+  if (pendingState?.awaitingCustomSize) {
+    const state = conversationManager.applyCustomSizeInput(pendingState, text);
+    if (!state) {
+      await ports.say(buildErrorMessage("請以「寬x高」輸入尺寸，例如 800x600。"));
       return;
     }
-    await conversations.delete(userId);
-    await deliver(result, deps, ports);
+    const question = await computeQuestion(state, deps);
+    if (question) {
+      await conversations.set(userId, state);
+      await ports.say(buildQuestionMessage(question));
+      return;
+    }
+    await resolveOrNoMatch(state, userId, deps, ports);
     return;
   }
 
@@ -84,29 +98,11 @@ export async function handleMessage(
   const state = conversationManager.startConversation(userId, "", parsed);
   if (parsed.brand) state.resolvedBrandId = parsed.brand;
 
-  const brands = parsed.brandCandidates
-    .map((id) => repo.getBrandById(id));
-  // repo.getBrandById is async on D1 — resolve the candidates first.
-  const resolvedBrands = (await Promise.all(brands)).filter(
-    (b): b is NonNullable<typeof b> => b !== null
-  );
-
-  const assets = state.resolvedBrandId ? await repo.getActiveAssets(state.resolvedBrandId) : [];
-  const question = conversationManager.getNextQuestion(state, resolvedBrands, assets);
+  const question = await computeQuestion(state, deps);
 
   if (!question && !state.resolvedBrandId) {
     await conversations.set(userId, state);
     await ports.say({ text: "你要哪個品牌的 Logo？請直接輸入品牌名稱（例如 INSIDE、關鍵評論網、TNL Mediagene）。" });
-    return;
-  }
-
-  if (!question && conversationManager.isComplete(state)) {
-    const result = await resolver.resolve(state);
-    if (result) {
-      await deliver(result, deps, ports);
-    } else {
-      await ports.say(await buildNoMatch(state.resolvedBrandId, repo));
-    }
     return;
   }
 
@@ -116,7 +112,89 @@ export async function handleMessage(
     return;
   }
 
+  if (conversationManager.isComplete(state)) {
+    await resolveOrNoMatch(state, userId, deps, ports);
+    return;
+  }
+
   await ports.say(buildErrorMessage("無法辨識品牌，請指定品牌名稱，例如「TNL」或「關鍵評論網」。"));
+}
+
+/**
+ * Handle a `select_<field>_<value>` block action (a question's button click):
+ * apply the answer to the stored conversation state, then ask the next
+ * question or resolve + deliver.
+ */
+export async function handleBlockAction(
+  userId: string,
+  actionId: string,
+  value: string,
+  deps: MessageDeps,
+  ports: MessagePorts
+): Promise<void> {
+  const { conversationManager, conversations } = deps;
+
+  if (typeof value !== "string" || !actionId.startsWith("select_")) return;
+  // action_id is `select_${field}_${value}`. Field names contain underscores
+  // (e.g. asset_type, brand_id) and so do some values, so a regex split is
+  // ambiguous. The button's own `value` is authoritative — strip it (plus the
+  // "select_" prefix and the joining "_") to recover the field exactly.
+  const field = actionId.slice("select_".length, actionId.length - value.length - 1);
+  if (!field) return;
+
+  const pendingState = await conversations.get(userId);
+  if (!pendingState) {
+    await ports.say(buildErrorMessage("對話已過期，請重新輸入品牌名稱。"));
+    return;
+  }
+
+  const updated = conversationManager.applyAnswer(pendingState, field, value);
+  const question = await computeQuestion(updated, deps);
+
+  if (question) {
+    await conversations.set(userId, updated);
+    await ports.say(buildQuestionMessage(question));
+    return;
+  }
+
+  // No more questions. `isComplete` is normally true here (purpose is always
+  // asked before any button-driven path can run out of questions), but a
+  // brand with literally zero assets can reach here with it still false — in
+  // that case resolve anyway so the user gets a clear no-match message rather
+  // than silence.
+  await resolveOrNoMatch(updated, userId, deps, ports);
+}
+
+/** Recompute the next guided question for the given state (brand/asset lookups). */
+async function computeQuestion(state: ConversationState, deps: MessageDeps) {
+  const { conversationManager, repo } = deps;
+  const brands = state.resolvedBrandId
+    ? [await repo.getBrandById(state.resolvedBrandId)].filter((b): b is NonNullable<typeof b> => b !== null)
+    : (await Promise.all(state.parsed.brandCandidates.map((id) => repo.getBrandById(id)))).filter(
+        (b): b is NonNullable<typeof b> => b !== null
+      );
+  const assets = state.resolvedBrandId ? await repo.getActiveAssets(state.resolvedBrandId) : [];
+  return conversationManager.getNextQuestion(state, brands, assets);
+}
+
+/** Resolve the asset for a complete state; deliver it, or report no-match. */
+async function resolveOrNoMatch(
+  state: ConversationState,
+  userId: string,
+  deps: MessageDeps,
+  ports: MessagePorts
+): Promise<void> {
+  const { conversations, resolver, repo } = deps;
+  const result = await resolver.resolve(state);
+  if (result) {
+    await conversations.delete(userId);
+    await deliver(result, deps, ports);
+    return;
+  }
+  const noMatch = await buildNoMatchMessage(state, repo);
+  if (noMatch.state) await conversations.set(userId, noMatch.state);
+  else await conversations.delete(userId);
+  await ports.say(noMatch.message);
 }
 
 /**
@@ -213,16 +291,4 @@ function emitAudit(
     purpose_url: result.purposeUrl,
     assetLabel,
   });
-}
-
-/** Minimal async no-match message (rich color-fallback buttons come later). */
-async function buildNoMatch(brandId: string | null, repo: CatalogReader): Promise<SlackMessage> {
-  if (!brandId) {
-    return buildErrorMessage("找不到符合條件的 Logo，請嘗試其他描述。");
-  }
-  const brand = await repo.getBrandById(brandId);
-  const brandName = brand?.display_name || "這個品牌";
-  return buildErrorMessage(
-    `找不到符合條件的 ${brandName} Logo，可能是這個品牌沒有你指定的顏色或格式，請換個描述再試。`
-  );
 }
