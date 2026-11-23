@@ -8,7 +8,9 @@ describe("loadBrandConfig", () => {
     const cfg = loadBrandConfig();
     expect(cfg["the-news-lens-關鍵評論網"].aliases).toContain("關鍵評論網");
     expect(cfg["inside-硬塞"].aliases).toContain("INSIDE");
-    expect(Object.keys(cfg).length).toBeGreaterThanOrEqual(30);
+    // Down from 41 after the 2026-11-22 cleanup of 25 stale keys that no
+    // longer matched any active brand (see config/brands.json history).
+    expect(Object.keys(cfg).length).toBeGreaterThanOrEqual(10);
   });
 });
 
