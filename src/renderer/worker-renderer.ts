@@ -5,21 +5,31 @@ import { validateDimensions } from "./validate-dimensions";
  * Cloudflare Images binding surface we rely on (subset of ImagesBinding). Typed
  * locally so the module compiles without the full @cloudflare/workers-types
  * Images types, and so the dependency on Images is explicit and narrow.
+ *
+ * `transform()` and `draw()` both return the same chainable shape (matching
+ * the real `ImageTransformer`), so either can be followed by more `draw()`
+ * calls or a final `output()`.
  */
+export interface ImageTransformerLike {
+  transform(opts: {
+    width?: number;
+    height?: number;
+    fit?: "scale-down" | "contain" | "pad" | "squeeze" | "cover" | "crop";
+    background?: string;
+  }): ImageTransformerLike;
+  /** Draw `image` onto this one. Omitting all of top/left/bottom/right centers it. */
+  draw(
+    image: ImageTransformerLike,
+    opts?: { opacity?: number; top?: number; left?: number; bottom?: number; right?: number }
+  ): ImageTransformerLike;
+  output(opts: { format: string; background?: string }): Promise<{
+    response(): Response;
+    image(): ReadableStream;
+  }>;
+}
+
 export interface ImagesBindingLike {
-  input(stream: ReadableStream | ArrayBuffer | Uint8Array): {
-    transform(opts: {
-      width?: number;
-      height?: number;
-      fit?: "scale-down" | "contain" | "cover" | "crop" | "pad";
-      background?: string;
-    }): {
-      output(opts: { format: string; background?: string }): Promise<{
-        response(): Response;
-        image(): ReadableStream;
-      }>;
-    };
-  };
+  input(stream: ReadableStream | ArrayBuffer | Uint8Array): ImageTransformerLike;
 }
 
 export interface WorkerRenderRequest {
@@ -82,15 +92,44 @@ export async function renderSvgNatural(source: Uint8Array): Promise<WorkerRender
   return { bytes, actualWidth: dims.width, actualHeight: dims.height };
 }
 
+// A 1×1 fully-transparent PNG (68 bytes), used as the base for an exact-size
+// background canvas (see renderCustomSize). A static constant rather than a
+// svg2png-wasm rasterisation: it needs no WASM init, so a PNG-source
+// custom-size render never pays for or depends on the SVG rasteriser, and
+// it's trivially inspectable (decodes to a real 1×1 RGBA PNG — verified with
+// `file`/zlib at the time this was generated, not hand-typed).
+const BLANK_PIXEL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
+
+function blankPixel(): Uint8Array {
+  const binary = atob(BLANK_PIXEL_PNG_BASE64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 /**
  * Render a source to an exact width×height canvas with the logo scaled to fit
  * (preserving aspect ratio), centred, and the requested background filled.
  *
- * SVG source → rasterised by svg2png-wasm first. The exact-canvas resize +
- * contain + centre + background is done by the Cloudflare Images binding
- * (`fit: "contain"` centres and pads to the exact canvas, matching the old
- * sharp composite). `paddingRatio` shrinks the fit box so the logo occupies
- * (1 - ratio) of the canvas with equal margin, reproducing the sharp behaviour.
+ * SVG source → rasterised by svg2png-wasm first. `paddingRatio` shrinks the
+ * fit box so the logo occupies (1 - ratio) of the canvas with equal margin,
+ * reproducing the old sharp-composite behaviour (0 = edge-to-edge).
+ *
+ * Two Images operations, composited rather than chained as two resizes:
+ *  1. The logo is `fit: "contain"`-scaled into the (possibly shrunk) inner
+ *     box, preserving its own aspect ratio — this is the ONLY resize of the
+ *     logo's content, so a deliberate margin (paddingRatio > 0) is never
+ *     scaled away by a later step.
+ *  2. A blank 1×1 pixel is `fit: "pad"`-expanded to the exact outer
+ *     width×height, filled with `background` — `fit: "pad"` is required
+ *     here (not `"contain"`), because `"contain"` only guarantees the
+ *     content FITS within the box and can return a canvas smaller than
+ *     width×height on one axis when the aspect ratios differ; only `"pad"`
+ *     (and a few other fit modes) guarantee the output canvas is exactly
+ *     the requested size (confirmed against Cloudflare's fit-mode docs).
+ * The logo is then `.draw()`n onto that base — omitting every position
+ * option centers it automatically, so there is no manual offset math.
  */
 export async function renderCustomSize(
   req: WorkerRenderRequest,
@@ -109,34 +148,19 @@ export async function renderCustomSize(
     pngBytes = source;
   }
 
-  // Shrink the fit box by the padding ratio: the logo occupies (1 - p) of the
-  // canvas, leaving equal margin on all sides. Images `fit: "contain"` centres
-  // the scaled image on the exact width×height canvas and fills the rest with
-  // `background`.
   const p = Math.min(Math.max(req.paddingRatio ?? 0, 0), 0.9);
   const bg = backgroundColor(background);
+  const innerW = Math.round(width * (1 - p));
+  const innerH = Math.round(height * (1 - p));
 
-  if (p > 0) {
-    // Two-step: resize into the inner (1-p) box, then pad to the exact canvas.
-    const innerW = Math.round(width * (1 - p));
-    const innerH = Math.round(height * (1 - p));
-    const inner = await images
-      .input(toArrayBuffer(pngBytes))
-      .transform({ width: innerW, height: innerH, fit: "contain", background: bg })
-      .output({ format: "image/png" });
-    const innerBytes = new Uint8Array(await inner.response().arrayBuffer());
-    const out = await images
-      .input(toArrayBuffer(innerBytes))
-      .transform({ width, height, fit: "contain", background: bg })
-      .output({ format: "image/png" });
-    const bytes = new Uint8Array(await out.response().arrayBuffer());
-    return { bytes, actualWidth: width, actualHeight: height };
-  }
-
-  const out = await images
+  const inner = images
     .input(toArrayBuffer(pngBytes))
-    .transform({ width, height, fit: "contain", background: bg })
-    .output({ format: "image/png" });
+    .transform({ width: innerW, height: innerH, fit: "contain" });
+  const base = images
+    .input(toArrayBuffer(blankPixel()))
+    .transform({ width, height, fit: "pad", background: bg });
+
+  const out = await base.draw(inner, {}).output({ format: "image/png" });
   const bytes = new Uint8Array(await out.response().arrayBuffer());
   return { bytes, actualWidth: width, actualHeight: height };
 }
