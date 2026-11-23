@@ -46,8 +46,20 @@ export interface MessageDeps {
 }
 
 /**
+ * KV conversation state is shared by every OAuth-installed workspace in one
+ * namespace, but a Slack user id is only unique *within* its own workspace —
+ * two different teams can mint the same literal id. Scoping the KV key by
+ * team prevents one workspace's in-progress conversation from being read or
+ * overwritten by another's.
+ */
+function conversationKey(teamId: string, userId: string): string {
+  return `${teamId}:${userId}`;
+}
+
+/**
  * Handle one inbound DM text, driving the guided flow: parse → (brand/attribute
- * questions) → resolve → deliver. State lives in KV between turns.
+ * questions) → resolve → deliver. State lives in KV between turns, keyed by
+ * `teamId:userId` (see `conversationKey`) so installs never cross-talk.
  *
  * Delivery handles all three paths: direct download (SVG/AI/PNG as-is), natural
  * PNG (svg2png-wasm), and custom size (svg2png-wasm + Cloudflare Images).
@@ -55,12 +67,14 @@ export interface MessageDeps {
 export async function handleMessage(
   text: string,
   userId: string,
+  teamId: string,
   deps: MessageDeps,
   ports: MessagePorts
 ): Promise<void> {
   const { parser, conversationManager, conversations } = deps;
+  const key = conversationKey(teamId, userId);
 
-  const pendingState = await conversations.get(userId);
+  const pendingState = await conversations.get(key);
 
   // --- Awaiting the mandatory purpose reply. Purpose is unconditionally the
   // LAST gate `getNextQuestion` ever asks (see conversation.ts), so once it's
@@ -71,7 +85,7 @@ export async function handleMessage(
       await ports.say(buildErrorMessage("請簡述這個 Logo 的用途（若有連結可直接貼上網址）才能取得檔案。"));
       return;
     }
-    await resolveOrNoMatch(state, userId, deps, ports);
+    await resolveOrNoMatch(state, key, deps, ports);
     return;
   }
 
@@ -85,11 +99,11 @@ export async function handleMessage(
     }
     const question = await computeQuestion(state, deps);
     if (question) {
-      await conversations.set(userId, state);
+      await conversations.set(key, state);
       await ports.say(buildQuestionMessage(question));
       return;
     }
-    await resolveOrNoMatch(state, userId, deps, ports);
+    await resolveOrNoMatch(state, key, deps, ports);
     return;
   }
 
@@ -101,19 +115,19 @@ export async function handleMessage(
   const question = await computeQuestion(state, deps);
 
   if (!question && !state.resolvedBrandId) {
-    await conversations.set(userId, state);
+    await conversations.set(key, state);
     await ports.say({ text: "你要哪個品牌的 Logo？請直接輸入品牌名稱（例如 INSIDE、關鍵評論網、TNL Mediagene）。" });
     return;
   }
 
   if (question) {
-    await conversations.set(userId, state);
+    await conversations.set(key, state);
     await ports.say(buildQuestionMessage(question));
     return;
   }
 
   if (conversationManager.isComplete(state)) {
-    await resolveOrNoMatch(state, userId, deps, ports);
+    await resolveOrNoMatch(state, key, deps, ports);
     return;
   }
 
@@ -127,12 +141,14 @@ export async function handleMessage(
  */
 export async function handleBlockAction(
   userId: string,
+  teamId: string,
   actionId: string,
   value: string,
   deps: MessageDeps,
   ports: MessagePorts
 ): Promise<void> {
   const { conversationManager, conversations } = deps;
+  const key = conversationKey(teamId, userId);
 
   if (typeof value !== "string" || !actionId.startsWith("select_")) return;
   // action_id is `select_${field}_${value}`. Field names contain underscores
@@ -142,7 +158,7 @@ export async function handleBlockAction(
   const field = actionId.slice("select_".length, actionId.length - value.length - 1);
   if (!field) return;
 
-  const pendingState = await conversations.get(userId);
+  const pendingState = await conversations.get(key);
   if (!pendingState) {
     await ports.say(buildErrorMessage("對話已過期，請重新輸入品牌名稱。"));
     return;
@@ -152,7 +168,7 @@ export async function handleBlockAction(
   const question = await computeQuestion(updated, deps);
 
   if (question) {
-    await conversations.set(userId, updated);
+    await conversations.set(key, updated);
     await ports.say(buildQuestionMessage(question));
     return;
   }
@@ -162,7 +178,7 @@ export async function handleBlockAction(
   // brand with literally zero assets can reach here with it still false — in
   // that case resolve anyway so the user gets a clear no-match message rather
   // than silence.
-  await resolveOrNoMatch(updated, userId, deps, ports);
+  await resolveOrNoMatch(updated, key, deps, ports);
 }
 
 /** Recompute the next guided question for the given state (brand/asset lookups). */
@@ -180,20 +196,20 @@ async function computeQuestion(state: ConversationState, deps: MessageDeps) {
 /** Resolve the asset for a complete state; deliver it, or report no-match. */
 async function resolveOrNoMatch(
   state: ConversationState,
-  userId: string,
+  key: string,
   deps: MessageDeps,
   ports: MessagePorts
 ): Promise<void> {
   const { conversations, resolver, repo } = deps;
   const result = await resolver.resolve(state);
   if (result) {
-    await conversations.delete(userId);
+    await conversations.delete(key);
     await deliver(result, deps, ports);
     return;
   }
   const noMatch = await buildNoMatchMessage(state, repo);
-  if (noMatch.state) await conversations.set(userId, noMatch.state);
-  else await conversations.delete(userId);
+  if (noMatch.state) await conversations.set(key, noMatch.state);
+  else await conversations.delete(key);
   await ports.say(noMatch.message);
 }
 

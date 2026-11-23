@@ -67,6 +67,9 @@ function seedPurposeState(brandId: string) {
   } as any;
 }
 
+const TEAM = "T_TEAM1";
+const KEY = `${TEAM}:u1`;
+
 function makeConversations() {
   const store = new Map<string, any>();
   return {
@@ -79,22 +82,27 @@ function makeConversations() {
 /** Fake CF Images binding: records the transform opts and returns stub PNG bytes. */
 function fakeImages() {
   const calls: any[] = [];
+  function node(): any {
+    return {
+      transform(opts: any) {
+        calls.push(opts);
+        return node();
+      },
+      draw(_image: any, _opts: any) {
+        return node();
+      },
+      output(_o: any) {
+        return Promise.resolve({
+          response: () => new Response(new Uint8Array([9, 9, 9])),
+          image: () => new Response(new Uint8Array([9, 9, 9])).body!,
+        });
+      },
+    };
+  }
   const binding = {
     calls,
     input(_src: any) {
-      return {
-        transform(opts: any) {
-          calls.push(opts);
-          return {
-            output(_o: any) {
-              return Promise.resolve({
-                response: () => new Response(new Uint8Array([9, 9, 9])),
-                image: () => new Response(new Uint8Array([9, 9, 9])).body!,
-              });
-            },
-          };
-        },
-      };
+      return node();
     },
   };
   return binding as any;
@@ -121,7 +129,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
 
-    await handleMessage("TNL logo", "u1", deps(repo, resolver, fakeParser("tnl"), conversations), ports);
+    await handleMessage("TNL logo", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     // No delivery on the first turn — a guided question is asked and state saved.
     expect(ports.uploads).toHaveLength(0);
@@ -139,14 +147,14 @@ describe("handleMessage (Worker pipeline)", () => {
     const d = deps(repo, resolver, fakeParser("tnl", "svg"), conversations);
 
     // Turn 1: fresh request → purpose question.
-    await handleMessage("TNL svg logo", "u1", d, ports);
+    await handleMessage("TNL svg logo", "u1", TEAM, d, ports);
     // Turn 2: the purpose reply resolves + delivers.
-    await handleMessage("放在官網首頁", "u1", d, ports);
+    await handleMessage("放在官網首頁", "u1", TEAM, d, ports);
 
     expect(ports.uploads).toHaveLength(1);
     expect(ports.uploads[0].filename).toBe("logo-blue.svg");
     expect(Array.from(ports.uploads[0].bytes)).toEqual([1, 2, 3]);
-    expect(conversations.delete).toHaveBeenCalledWith("u1");
+    expect(conversations.delete).toHaveBeenCalledWith(KEY);
     // Audit fires for the delivered asset (direct download → source format).
     expect(ports.audits).toHaveLength(1);
     expect(ports.audits[0]).toMatchObject({ slack_user_id: "u1", brand_id: "tnl", asset_id: "a1", output_format: "svg", assetLabel: "logo-blue.svg" });
@@ -167,15 +175,18 @@ describe("handleMessage (Worker pipeline)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
     const images = fakeImages();
-    await conversations.set("u1", seedPurposeState("tnl"));
+    await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("1200x630", "u1", deps(repo, resolver, fakeParser("tnl"), conversations, images), ports);
+    await handleMessage("1200x630", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations, images), ports);
 
     // Rendered PNG uploaded with a .png filename, Images called at the exact canvas.
     expect(ports.uploads).toHaveLength(1);
     expect(ports.uploads[0].filename).toBe("logo-blue.png");
     expect(Array.from(ports.uploads[0].bytes)).toEqual([9, 9, 9]);
-    expect(images.calls[0]).toMatchObject({ width: 1200, height: 630, fit: "contain", background: "#ffffff" });
+    // calls[0] fits the logo into the box; calls[1] is the exact-size,
+    // background-filled base canvas the logo gets drawn onto (see
+    // worker-renderer.test.ts for the full padding-composite assertions).
+    expect(images.calls[1]).toMatchObject({ width: 1200, height: 630, fit: "pad", background: "#ffffff" });
     // Audit records the rendered PNG at the requested canvas.
     expect(ports.audits).toHaveLength(1);
     expect(ports.audits[0]).toMatchObject({ output_format: "png", width: 1200, height: 630, assetLabel: "logo-blue.png" });
@@ -194,9 +205,9 @@ describe("handleMessage (Worker pipeline)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
     const images = fakeImages();
-    await conversations.set("u1", seedPurposeState("tnl"));
+    await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("99999x99999", "u1", deps(repo, resolver, fakeParser("tnl"), conversations, images), ports);
+    await handleMessage("99999x99999", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations, images), ports);
 
     expect(ports.uploads).toHaveLength(0);
     expect(images.calls).toHaveLength(0);
@@ -209,7 +220,7 @@ describe("handleMessage (Worker pipeline)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
 
-    await handleMessage("給我 logo", "u1", deps(repo, resolver, fakeParser(null), conversations), ports);
+    await handleMessage("給我 logo", "u1", TEAM, deps(repo, resolver, fakeParser(null), conversations), ports);
 
     expect(ports.uploads).toHaveLength(0);
     expect(conversations.set).toHaveBeenCalled();
@@ -221,9 +232,9 @@ describe("handleMessage (Worker pipeline)", () => {
     const resolver = new AssetResolver(repo as any);
     const conversations = makeConversations();
     const ports = makePorts();
-    await conversations.set("u1", seedPurposeState("tnl"));
+    await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("放在官網", "u1", deps(repo, resolver, fakeParser("tnl"), conversations), ports);
+    await handleMessage("放在官網", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     expect(ports.uploads).toHaveLength(0);
     expect(ports.said.some((m) => /找不到/.test(m.text || ""))).toBe(true);
@@ -242,7 +253,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const conversations = makeConversations();
     const ports = makePorts();
     // Mid-flow: brand resolved, nothing else answered yet.
-    await conversations.set("u1", {
+    await conversations.set(KEY, {
       userId: "u1", channelId: "", resolvedBrandId: "tnl", resolvedAssetId: null,
       awaitingCustomSize: false, awaitingPurpose: false, sizeResolved: false,
       backgroundResolved: false, purpose: null, purposeUrl: null,
@@ -255,7 +266,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     });
 
     await handleBlockAction(
-      "u1", "select_format_svg", "svg",
+      "u1", TEAM, "select_format_svg", "svg",
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -272,7 +283,7 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const ports = makePorts();
 
     await handleBlockAction(
-      "u1", "select_format_svg", "svg",
+      "u1", TEAM, "select_format_svg", "svg",
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -286,14 +297,14 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const ports = makePorts();
     // Purpose already answered; only the color pick is left (and that leads
     // nowhere, since no assets exist at all).
-    await conversations.set("u1", {
+    await conversations.set(KEY, {
       ...seedPurposeState("tnl"),
       awaitingPurpose: false,
       purpose: "social post",
     });
 
     await handleBlockAction(
-      "u1", "select_color_blue", "blue",
+      "u1", TEAM, "select_color_blue", "blue",
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
@@ -308,10 +319,32 @@ describe("handleBlockAction (select_ button clicks)", () => {
     const ports = makePorts();
 
     await handleBlockAction(
-      "u1", "select_format_svg", undefined as any,
+      "u1", TEAM, "select_format_svg", undefined as any,
       deps(repo, resolver, fakeParser("tnl"), conversations), ports
     );
 
     expect(ports.said).toHaveLength(0);
+  });
+
+  it("does not leak conversation state between two workspaces with the same Slack user id", async () => {
+    // Same literal userId ("u1") in two different installed teams — Slack
+    // ids are only unique within their own workspace, so this collision is
+    // realistic once more than one team installs the bot.
+    const repo = fakeRepo([makeAsset({ format: "svg" })]);
+    const resolver = new AssetResolver(repo as any);
+    const conversations = makeConversations();
+    const portsA = makePorts();
+    const portsB = makePorts();
+
+    // Team A starts a guided flow for "u1" (asks a question, persists state).
+    await handleMessage("TNL logo", "u1", "T_TEAMA", deps(repo, resolver, fakeParser("tnl"), conversations), portsA);
+    // Team B's "u1" (a different, unrelated person) starts completely fresh.
+    await handleMessage("TNL logo", "u1", "T_TEAMB", deps(repo, resolver, fakeParser("tnl"), conversations), portsB);
+
+    // Each team's state lives under its own key — neither overwrote the other.
+    expect(await conversations.get("T_TEAMA:u1")).toBeDefined();
+    expect(await conversations.get("T_TEAMB:u1")).toBeDefined();
+    expect(conversations.set).toHaveBeenCalledWith("T_TEAMA:u1", expect.anything());
+    expect(conversations.set).toHaveBeenCalledWith("T_TEAMB:u1", expect.anything());
   });
 });
