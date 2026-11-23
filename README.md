@@ -28,8 +28,7 @@ https://logos-bot.thenewslens.workers.dev/slack/install
 | 品牌／資產目錄 | **D1**（`src/catalog/d1-catalog-repo.ts`） |
 | 多輪對話狀態 | **KV**（`CONVERSATIONS` binding，TTL） |
 | 各 workspace 的安裝資訊（bot token） | **KV**（`INSTALLATIONS` binding，`KVInstallationStore`） |
-| SVG → PNG 算圖 | `svg2png-wasm` |
-| 自訂尺寸 / 底色 | **Cloudflare Images** binding |
+| SVG → PNG 算圖、自訂尺寸 / 底色 | `svg2png-wasm`（純 SVG 合成，不依賴 Cloudflare Images） |
 | Google Drive / Vertex 認證 | 純 `fetch` + WebCrypto 自簽 JWT（`src/google-auth.ts`，無 `googleapis` SDK） |
 
 離線的目錄掃描（讀 Google Drive、建立品牌/資產資料）維持跑在 **Node**
@@ -48,7 +47,7 @@ src/
   env.ts                 Worker 的 bindings / vars / secrets 型別
   bot/                   對話流程、品牌比對、算圖後的交付邏輯（Worker 用）
   catalog/               D1 讀取（Worker 用）與 SQLite 讀寫（scan 用）共用的型別/邏輯
-  renderer/               svg2png-wasm + Cloudflare Images 算圖（Worker 用）
+  renderer/               svg2png-wasm 算圖（Worker 用）
   scanner/                Drive 掃描、檔案中繼資料推斷（scan 用，Node）
   sync/                   本機 catalog → D1 的資料同步 CLI
   scan.ts                 `pnpm scan` 入口
@@ -88,8 +87,8 @@ pnpm sync:d1:remote     # 推進正式 D1
 pnpm deploy
 ```
 
-Worker 需要的 bindings 定義在 `wrangler.jsonc`（D1、兩個 KV namespace、Cloudflare
-Images）。Secrets 用 `wrangler secret put <NAME>` 設定，本機開發對照
+Worker 需要的 bindings 定義在 `wrangler.jsonc`（D1、兩個 KV namespace）。
+Secrets 用 `wrangler secret put <NAME>` 設定，本機開發對照
 `.dev.vars.example`：
 
 | Secret | 用途 |

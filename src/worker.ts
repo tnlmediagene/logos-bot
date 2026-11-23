@@ -5,7 +5,7 @@
  * SlackOAuthApp, which internally dispatches by method + exact path:
  *   - POST /slack/events        — signature + URL-verification challenge,
  *     then `message`/`block_actions` events (parse → KV conversation → D1
- *     resolve → deliver, svg2png-wasm + Cloudflare Images rendering).
+ *     resolve → deliver, pure svg2png-wasm rendering).
  *   - GET  /slack/install        — starts the OAuth install flow.
  *   - GET  /slack/oauth_redirect — OAuth callback; saves the installation
  *     (bot token) to the INSTALLATIONS KV via KVInstallationStore.
