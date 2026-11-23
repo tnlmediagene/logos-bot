@@ -45,14 +45,30 @@ What the sync does and why it is safe:
 
 - **Data only, no DDL.** The remote schema is owned by `d1 migrations`; the sync
   never emits `CREATE`/`ALTER`/`DROP`. Run migrations first on a fresh D1.
-- **Scan-owned tables are fully replaced** (`DELETE` then reload):
-  `scanner_runs`, `brands`, `assets`, `manual_overrides`. Re-running is
-  idempotent — the remote ends up exactly matching the local scan.
+- **No explicit transaction.** `wrangler d1 execute`'s remote HTTP exec
+  endpoint rejects explicit `BEGIN TRANSACTION`/`SAVEPOINT` statements
+  outright, so every statement in the file runs with its own implicit,
+  single-statement transaction — there's no multi-statement scope for
+  `PRAGMA defer_foreign_keys` to defer *within*.
+- **`scanner_runs`/`brands`/`assets` are upserted, never delete-then-reload.**
+  Each row is inserted, or has every column overwritten in place
+  (`ON CONFLICT("id") DO UPDATE`) if its id already exists — an existing row's
+  identity (and anything with a foreign key pointing at it) is never
+  interrupted. A row is only ever `DELETE`d when its id is absent from the
+  new scan entirely. Deletes run first, in strict child→parent order
+  (`generated_outputs` → `assets` → `brands` → `scanner_runs`), then upserts
+  run in the opposite, parent→child order — so a parent is never removed
+  while a child might still reference it, and a child's foreign keys always
+  resolve to a row that already exists by the time it's written.
+- **`manual_overrides` is fully replaced** (`DELETE` then reload) — nothing
+  has a foreign key into it, so the simpler reset-and-reload is safe there.
 - **Runtime-owned tables are never touched:** `deliveries` (the append-only
-  audit log) and `generated_outputs` (render cache). A catalog sync must not
-  wipe audit history.
-- One transaction, `defer_foreign_keys`, delete child→parent / insert
-  parent→child, so foreign keys never dangle mid-sync.
+  audit log) and `generated_outputs` (render cache), except that
+  `generated_outputs` rows are purged when the asset they were rendered from
+  is genuinely gone from the new scan — a stale cache row pointing at a
+  deleted asset would otherwise leave a dangling foreign key.
+- Re-running the same sync is idempotent — the remote ends up matching the
+  local scan either way.
 
 `DATABASE_PATH` (default `./data/catalog.db`) selects the source DB;
 `SYNC_OUT_FILE` overrides where the generated `.sql` is written (default under

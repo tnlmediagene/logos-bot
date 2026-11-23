@@ -198,6 +198,42 @@ describe("buildSyncSql", () => {
       expect(target.prepare("SELECT id FROM assets").all()).toEqual([{ id: "a2" }]);
       expect((target.prepare("SELECT COUNT(*) c FROM generated_outputs").get() as { c: number }).c).toBe(0);
     });
+
+    // Regression coverage for the round-2 Copilot review finding: the
+    // previous delete pass ran parent → child ("scanner_runs", then
+    // "brands", then "assets"), so a brand removed from the scan was
+    // DELETEd before the stale asset still pointing at it — violating
+    // assets.brand_id's foreign key. Deletes must run child → parent
+    // instead, so the referencing asset is already gone by the time its
+    // parent brand (or scanner_run) is removed.
+    it("removes a stale brand only after the stale asset referencing it is already gone", () => {
+      // The new scan no longer has brand 'old' or its asset 'a1' at all.
+      db.prepare("DELETE FROM generated_outputs").run();
+      db.prepare("DELETE FROM manual_overrides").run();
+      db.prepare("DELETE FROM assets").run();
+      db.prepare("DELETE FROM brands").run();
+      db.prepare("INSERT INTO brands (id, display_name, aliases) VALUES ('tnl', 'TNL', '[]')").run();
+      db.prepare(
+        `INSERT INTO assets (id, brand_id, asset_type, variant, format, usage, source_drive_file_id, source_path, inferred_from, scanner_run_id)
+         VALUES ('a2', 'tnl', 'logo', 'primary', 'svg', '["general"]', 'file2', '/p/a2.svg', '[]', 1)`
+      ).run();
+      const sql = buildSyncSql(db);
+
+      const target = freshTarget();
+      target.prepare("INSERT INTO brands (id, display_name, aliases) VALUES ('old', 'Old Brand', '[]')").run();
+      target
+        .prepare(
+          `INSERT INTO assets (id, brand_id, asset_type, variant, format, usage, source_drive_file_id, source_path, inferred_from, scanner_run_id)
+           VALUES ('a1', 'old', 'logo', 'primary', 'svg', '["general"]', 'file1', '/p/a1.svg', '[]', NULL)`
+        )
+        .run();
+
+      expect(() => target.exec(sql)).not.toThrow();
+
+      // The stale brand and its stale asset are both gone; the new ones exist.
+      expect(target.prepare("SELECT id FROM brands").all()).toEqual([{ id: "tnl" }]);
+      expect(target.prepare("SELECT id FROM assets").all()).toEqual([{ id: "a2" }]);
+    });
   });
 });
 

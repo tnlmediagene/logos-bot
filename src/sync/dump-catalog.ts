@@ -108,12 +108,21 @@ function columnsOf(db: Database.Database, table: string): string[] {
  * So `scanner_runs`, `brands`, and `assets` are each **upserted** — existing
  * ids are updated in place, never deleted and reinserted — and a row is only
  * ever `DELETE`d when its id is absent from the new scan entirely (a brand or
- * asset that's genuinely gone). Deleting `assets` that are gone first purges
- * their now-orphaned `generated_outputs` rows (a stale cache entry pointing
- * at a deleted asset is meaningless — keeping it would only leave a dangling
+ * asset that's genuinely gone).
+ *
+ * Every stale-row DELETE runs before any upsert, and in strict child → parent
+ * order (`generated_outputs` → `assets` → `brands` → `scanner_runs`): with no
+ * multi-statement transaction to defer the FK check within (see above), a
+ * parent row can only be deleted once every child row that might still point
+ * at it is already gone. Deleting `assets` that are gone first purges their
+ * now-orphaned `generated_outputs` rows (a stale cache entry pointing at a
+ * deleted asset is meaningless — keeping it would only leave a dangling
  * foreign key the next sync couldn't apply at all), and nothing else in
- * `generated_outputs` is ever touched. `manual_overrides` has no inbound
- * foreign key from anywhere, so it keeps the simpler reset-and-reload.
+ * `generated_outputs` is ever touched. Upserts then run in the opposite,
+ * parent → child order (`scanner_runs` → `brands` → `assets`), so an asset's
+ * `brand_id`/`scanner_run_id` always resolves to a row that already exists
+ * by the time it's written. `manual_overrides` has no inbound foreign key
+ * from anywhere, so it keeps the simpler reset-and-reload.
  */
 export function buildSyncSql(db: Database.Database): string {
   const lines: string[] = [];
@@ -122,22 +131,28 @@ export function buildSyncSql(db: Database.Database): string {
   lines.push("-- Idempotent: upserts scanner_runs/brands/assets by id, resets manual_overrides.");
   lines.push('PRAGMA defer_foreign_keys = TRUE;');
 
-  for (const table of FK_PARENT_TABLES) {
+  const tables = FK_PARENT_TABLES.map((table) => {
     const columns = columnsOf(db, table);
     const rows = db.prepare(`SELECT * FROM "${table}"`).all() as Row[];
     const keepIds = new Set(rows.map((r) => String(r.id)));
+    return { table, columns, rows, keepIds };
+  });
 
-    if (table === "assets") {
-      // An asset about to be removed may still have a generated_outputs row
-      // pointing at it — purge those first, or the DELETE below violates the
-      // foreign key with no later statement to reconcile it.
-      lines.push(`-- generated_outputs: drop rows for assets no longer in the scan`);
-      lines.push(deleteNotIn("generated_outputs", "source_asset_id", keepIds));
-    }
-
+  // Pass 1 — all stale-row deletes, child → parent: generated_outputs (any
+  // row orphaned by an asset that's about to be removed), then assets,
+  // brands, scanner_runs. A parent's DELETE never runs while a child row
+  // that could still reference it is pending.
+  const assets = tables.find((t) => t.table === "assets")!;
+  lines.push(`-- generated_outputs: drop rows for assets no longer in the scan`);
+  lines.push(deleteNotIn("generated_outputs", "source_asset_id", assets.keepIds));
+  for (const { table, keepIds } of [...tables].reverse()) {
     lines.push(`-- ${table}: remove rows no longer in the scan`);
     lines.push(deleteNotIn(table, "id", keepIds));
+  }
 
+  // Pass 2 — all upserts, parent → child: scanner_runs, brands, then assets,
+  // so an asset's foreign keys always resolve by the time it's written.
+  for (const { table, columns, rows } of tables) {
     if (rows.length > 0) {
       lines.push(`-- ${table}: upsert ${rows.length} row(s)`);
       for (const row of rows) lines.push(upsertStatement(table, columns, row));
