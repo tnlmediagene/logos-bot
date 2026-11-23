@@ -80,7 +80,7 @@ D1 的 `prepare().bind().all()/first()/run()` 全是 Promise，所以：
 - secrets 用 `wrangler secret put`；非敏感的用 `wrangler.toml [vars]`。
 
 ### 3.6 `src/renderer/cache.ts`（`OutputCache`）→ 選擇性保留
-- 現在就沒接上 delivery（見 SETUP_TODO）。Workers 版若要快取算好的 PNG，改存 **R2**（bytes）+ D1/KV（key→R2 path）。**建議先不接**，維持現狀（即時算），跟現在一樣。
+- 現在就沒接上 delivery。Workers 版若要快取算好的 PNG，改存 **R2**（bytes）+ D1/KV（key→R2 path）。**建議先不接**，維持現狀（即時算），跟現在一樣。
 
 ## 4. Slack 層重寫
 
