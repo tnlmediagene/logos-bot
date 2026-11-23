@@ -16,7 +16,9 @@ export interface Env {
   // slack-cloudflare-workers' KVInstallationStore. Separate from
   // CONVERSATIONS: installs persist indefinitely, conversation state doesn't.
   INSTALLATIONS: KVNamespace;
-  IMAGES: ImagesBinding; // Cloudflare Images: custom-size render (resize + bg)
+  // No Cloudflare Images binding — custom-size rendering is pure svg2png-wasm
+  // (see src/renderer/worker-renderer.ts). It needs no account-level Images
+  // product or billing plan.
 
   // --- Non-secret vars (wrangler.jsonc [vars]) ---
   MAX_OUTPUT_SIZE: string;

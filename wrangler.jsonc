@@ -44,9 +44,10 @@
     }
   ],
 
-  // Cloudflare Images binding — the sharp replacement for resize + composite.
-  // Used only on custom-size renders; the SVG natural-PNG path is pure WASM.
-  "images": { "binding": "IMAGES" },
+  // No Cloudflare Images binding — custom-size rendering (resize + composite
+  // + background fill) is pure svg2png-wasm (src/renderer/worker-renderer.ts
+  // composes a wrapper SVG and rasterises it), so it needs no Images product
+  // or billing plan on the account at all.
 
   // Non-secret configuration. Secrets (SLACK_SIGNING_SECRET, SLACK_CLIENT_ID,
   // SLACK_CLIENT_SECRET, GOOGLE_SERVICE_ACCOUNT_KEY, and the now-optional

@@ -4,6 +4,21 @@ import { ConversationManager } from "../../src/bot/conversation";
 import { AssetResolver, ResolvedAsset } from "../../src/bot/asset-resolver";
 import { AssetRecord, BrandRecord } from "../../src/catalog/catalog-repo";
 
+// renderCustomSize calls real svg2png-wasm, whose .wasm import only resolves
+// inside Wrangler's bundler (fails under plain vitest with "Cannot find
+// package 'wbg'" — see worker-renderer.test.ts). Mocked here so the custom-
+// size delivery test below can exercise handleMessage's own orchestration
+// (filename, audit, upload) without needing the real rasteriser; the
+// rendering itself is covered by worker-renderer.test.ts's buildComposedSvg
+// tests plus manual verification via wrangler dev.
+vi.mock("../../src/renderer/worker-renderer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/renderer/worker-renderer")>();
+  return {
+    ...actual,
+    renderCustomSize: vi.fn(async () => ({ bytes: new Uint8Array([9, 9, 9]), actualWidth: 1200, actualHeight: 630 })),
+  };
+});
+
 function makeAsset(over: Partial<AssetRecord> = {}): AssetRecord {
   return {
     id: "a1", brand_id: "tnl", format: "svg", color: "blue", language: null,
@@ -79,36 +94,7 @@ function makeConversations() {
   };
 }
 
-/** Fake CF Images binding: records the transform opts and returns stub PNG bytes. */
-function fakeImages() {
-  const calls: any[] = [];
-  function node(): any {
-    return {
-      transform(opts: any) {
-        calls.push(opts);
-        return node();
-      },
-      draw(_image: any, _opts: any) {
-        return node();
-      },
-      output(_o: any) {
-        return Promise.resolve({
-          response: () => new Response(new Uint8Array([9, 9, 9])),
-          image: () => new Response(new Uint8Array([9, 9, 9])).body!,
-        });
-      },
-    };
-  }
-  const binding = {
-    calls,
-    input(_src: any) {
-      return node();
-    },
-  };
-  return binding as any;
-}
-
-function deps(repo: any, resolver: AssetResolver, parser: any, conversations: any, images?: any): MessageDeps {
+function deps(repo: any, resolver: AssetResolver, parser: any, conversations: any): MessageDeps {
   return {
     parser,
     conversationManager: new ConversationManager(),
@@ -116,7 +102,6 @@ function deps(repo: any, resolver: AssetResolver, parser: any, conversations: an
     resolver,
     repo,
     driveClient: { downloadFile: vi.fn(async () => new Uint8Array([1, 2, 3])) } as any,
-    images: images ?? fakeImages(),
     maxOutputSize: 4096,
   };
 }
@@ -160,11 +145,9 @@ describe("handleMessage (Worker pipeline)", () => {
     expect(ports.audits[0]).toMatchObject({ slack_user_id: "u1", brand_id: "tnl", asset_id: "a1", output_format: "svg", assetLabel: "logo-blue.svg" });
   });
 
-  it("renders a custom size via the Images binding and uploads the PNG", async () => {
+  it("renders a custom size (svg2png-wasm mocked — real rasterising is covered elsewhere) and uploads the PNG", async () => {
     const asset = makeAsset({ format: "png", source_path: "TNL/logo-blue.png" });
     const repo = fakeRepo([asset]);
-    // Resolver stub forcing a custom-size render from a PNG source (CF Images
-    // path — no svg2png-wasm, so this runs in plain vitest).
     const resolver = {
       resolve: async (): Promise<ResolvedAsset> => ({
         asset, needsCustomSize: true, renderNaturalPng: false,
@@ -174,25 +157,20 @@ describe("handleMessage (Worker pipeline)", () => {
     } as any;
     const conversations = makeConversations();
     const ports = makePorts();
-    const images = fakeImages();
     await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("1200x630", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations, images), ports);
+    await handleMessage("1200x630", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
-    // Rendered PNG uploaded with a .png filename, Images called at the exact canvas.
+    // Rendered PNG uploaded with a .png filename (the mocked renderer's bytes).
     expect(ports.uploads).toHaveLength(1);
     expect(ports.uploads[0].filename).toBe("logo-blue.png");
     expect(Array.from(ports.uploads[0].bytes)).toEqual([9, 9, 9]);
-    // calls[0] fits the logo into the box; calls[1] is the exact-size,
-    // background-filled base canvas the logo gets drawn onto (see
-    // worker-renderer.test.ts for the full padding-composite assertions).
-    expect(images.calls[1]).toMatchObject({ width: 1200, height: 630, fit: "pad", background: "#ffffff" });
     // Audit records the rendered PNG at the requested canvas.
     expect(ports.audits).toHaveLength(1);
     expect(ports.audits[0]).toMatchObject({ output_format: "png", width: 1200, height: 630, assetLabel: "logo-blue.png" });
   });
 
-  it("rejects an oversized custom render before calling Images", async () => {
+  it("rejects an oversized custom render before ever rendering", async () => {
     const asset = makeAsset({ format: "png", source_path: "TNL/logo.png" });
     const repo = fakeRepo([asset]);
     const resolver = {
@@ -204,13 +182,11 @@ describe("handleMessage (Worker pipeline)", () => {
     } as any;
     const conversations = makeConversations();
     const ports = makePorts();
-    const images = fakeImages();
     await conversations.set(KEY, seedPurposeState("tnl"));
 
-    await handleMessage("99999x99999", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations, images), ports);
+    await handleMessage("99999x99999", "u1", TEAM, deps(repo, resolver, fakeParser("tnl"), conversations), ports);
 
     expect(ports.uploads).toHaveLength(0);
-    expect(images.calls).toHaveLength(0);
     expect(ports.said.some((m) => /4096|超過/.test(m.text || ""))).toBe(true);
   });
 

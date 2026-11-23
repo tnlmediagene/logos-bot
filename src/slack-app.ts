@@ -47,7 +47,6 @@ async function buildDeps(env: Env): Promise<{ deps: MessageDeps; repo: D1Catalog
     resolver,
     repo,
     driveClient,
-    images: env.IMAGES as any,
     maxOutputSize: Number(env.MAX_OUTPUT_SIZE) || 4096,
   };
   return { deps, repo };

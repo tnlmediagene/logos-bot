@@ -30,12 +30,11 @@ export default {
         db: typeof env.DB?.prepare === "function",
         conversations: typeof env.CONVERSATIONS?.get === "function",
         installations: typeof env.INSTALLATIONS?.get === "function",
-        images: typeof (env.IMAGES as any)?.input === "function",
       };
       return Response.json({
         service: "logos-bot",
         stage: "oauth",
-        ok: bindings.db && bindings.conversations && bindings.installations && bindings.images,
+        ok: bindings.db && bindings.conversations && bindings.installations,
         bindings,
       });
     }

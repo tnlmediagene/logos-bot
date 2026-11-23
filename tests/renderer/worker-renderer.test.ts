@@ -1,42 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { renderCustomSize, validateDimensions, ImagesBindingLike } from "../../src/renderer/worker-renderer";
+import { buildComposedSvg, validateDimensions } from "../../src/renderer/worker-renderer";
 
 /**
- * Fake Cloudflare Images binding that records every transform() opts object and
- * returns stub PNG bytes. Lets us assert the exact canvas/fit/background the
- * renderer asks Images for, without the real binding (which only exists inside
- * the Workers runtime — the WASM SVG rasteriser is exercised under wrangler dev).
+ * `renderCustomSize`/`renderSvgNatural` themselves call real `svg2png-wasm`,
+ * whose `.wasm` import only resolves inside Wrangler's bundler — it fails
+ * under plain Node/vitest with "Cannot find package 'wbg'" — so nothing that
+ * actually rasterises can run in this suite. `buildComposedSvg` is the pure,
+ * WASM-free part (all the positioning/clamping/background logic); these
+ * tests cover it directly. The actual pixel output (exact canvas size,
+ * padding margin visible, transparent background staying transparent) was
+ * verified manually against the real WASM rasteriser via `wrangler dev`
+ * --remote, decoding the resulting PNG's real pixels — not by an automated
+ * test here.
  */
-function fakeImages(): ImagesBindingLike & { calls: any[]; draws: any[]; outBytes: Uint8Array } {
-  const calls: any[] = [];
-  const draws: any[] = [];
-  const outBytes = new Uint8Array([7, 7, 7, 7]);
-  function node(): any {
-    return {
-      transform(opts: any) {
-        calls.push(opts);
-        return node();
-      },
-      draw(image: any, opts: any) {
-        draws.push({ image, opts });
-        return node();
-      },
-      output() {
-        return Promise.resolve({
-          response: () => new Response(outBytes),
-          image: () => new Response(outBytes).body!,
-        });
-      },
-    };
-  }
-  return {
-    calls,
-    draws,
-    outBytes,
-    input() {
-      return node();
-    },
-  } as any;
+
+function attr(svg: string, tag: string, name: string): string | undefined {
+  const tagMatch = svg.match(new RegExp(`<${tag}\\b[^>]*>`));
+  if (!tagMatch) return undefined;
+  const m = tagMatch[0].match(new RegExp(`${name}="([^"]*)"`));
+  return m?.[1];
 }
 
 describe("validateDimensions (shared)", () => {
@@ -48,75 +30,68 @@ describe("validateDimensions (shared)", () => {
   });
 });
 
-describe("renderCustomSize (PNG source → Images)", () => {
-  it("builds an exact-size background canvas and draws the logo onto it, centered", async () => {
-    const images = fakeImages();
-    const src = new Uint8Array([1, 2, 3, 4]);
-    const result = await renderCustomSize(
-      { source: src, sourceFormat: "png", width: 1200, height: 630, background: "transparent" },
-      images
-    );
-    expect(result.actualWidth).toBe(1200);
-    expect(result.actualHeight).toBe(630);
-    expect(Array.from(result.bytes)).toEqual([7, 7, 7, 7]);
-    // Two transforms: the logo fit into the (unshrunk, p=0) box, and the
-    // base canvas padded to the exact outer size — NOT the same "contain"
-    // call reused for both, which is what silently produced an
-    // under-sized canvas when the source aspect ratio didn't match.
-    expect(images.calls).toHaveLength(2);
-    expect(images.calls[0]).toMatchObject({ width: 1200, height: 630, fit: "contain" });
-    expect(images.calls[0].background).toBeUndefined();
-    expect(images.calls[1]).toMatchObject({ width: 1200, height: 630, fit: "pad" });
-    // The base canvas must guarantee the exact size, hence "pad" not "contain".
-    expect(images.calls[1].background).toBeUndefined();
-    // The logo is drawn onto the base with no position options → centered.
-    expect(images.draws).toHaveLength(1);
-    expect(images.draws[0].opts).toEqual({});
+describe("buildComposedSvg", () => {
+  const pngBytes = new Uint8Array([1, 2, 3, 4]);
+
+  it("sizes the outer canvas to exactly width×height", () => {
+    const svg = buildComposedSvg({ pngBytes, width: 1200, height: 630, background: "white" });
+    const root = svg.match(/^<svg\b[^>]*>/)![0];
+    expect(root).toContain('width="1200"');
+    expect(root).toContain('height="630"');
   });
 
-  it("maps named backgrounds to CSS colors on the base canvas", async () => {
-    const images = fakeImages();
-    await renderCustomSize(
-      { source: new Uint8Array([1]), sourceFormat: "png", width: 100, height: 100, background: "white" },
-      images
-    );
-    expect(images.calls[1].background).toBe("#ffffff");
-
-    const images2 = fakeImages();
-    await renderCustomSize(
-      { source: new Uint8Array([1]), sourceFormat: "png", width: 100, height: 100, background: "black" },
-      images2
-    );
-    expect(images2.calls[1].background).toBe("#000000");
+  it("with no padding, the image fills the full canvas (no margin)", () => {
+    const svg = buildComposedSvg({ pngBytes, width: 1200, height: 630, background: "white" });
+    expect(attr(svg, "image", "x")).toBe("0");
+    expect(attr(svg, "image", "y")).toBe("0");
+    expect(attr(svg, "image", "width")).toBe("1200");
+    expect(attr(svg, "image", "height")).toBe("630");
   });
 
-  it("padding shrinks only the logo's fit box, never the outer canvas", async () => {
-    const images = fakeImages();
-    await renderCustomSize(
-      { source: new Uint8Array([1]), sourceFormat: "png", width: 1000, height: 1000, background: "white", paddingRatio: 0.2 },
-      images
-    );
-    // Logo fit into the shrunk (1-0.2)=800 inner box...
-    expect(images.calls[0]).toMatchObject({ width: 800, height: 800, fit: "contain" });
-    expect(images.calls[0].background).toBeUndefined();
-    // ...but the base canvas (what actually determines the output size) is
-    // still the full, unshrunk 1000×1000 — this is the bug Copilot caught:
-    // a prior version re-resized the already-padded 800×800 result back up
-    // to 1000×1000 with "contain", which (since the aspect ratios match)
-    // scaled the logo to fill the canvas and erased the padding entirely.
-    expect(images.calls[1]).toMatchObject({ width: 1000, height: 1000, fit: "pad", background: "#ffffff" });
-    // The (smaller, padded) logo is drawn onto the full-size base, centered.
-    expect(images.draws).toHaveLength(1);
-    expect(images.draws[0].opts).toEqual({});
+  it("padding shrinks the image box and centers it, leaving the outer canvas untouched", () => {
+    const svg = buildComposedSvg({ pngBytes, width: 1000, height: 1000, background: "white", paddingRatio: 0.2 });
+    const root = svg.match(/^<svg\b[^>]*>/)![0];
+    // Outer canvas: still the full, unshrunk 1000×1000 — NOT the padded
+    // 800×800 box. A prior version re-resized the padded box back up to the
+    // full canvas with "contain", which (since the aspect ratios match after
+    // uniform shrinking) silently erased the margin entirely.
+    expect(root).toContain('width="1000"');
+    expect(root).toContain('height="1000"');
+    // Inner image: 1000 * (1 - 0.2) = 800, centered with a 100px margin on
+    // each side ((1000 - 800) / 2).
+    expect(attr(svg, "image", "width")).toBe("800");
+    expect(attr(svg, "image", "height")).toBe("800");
+    expect(attr(svg, "image", "x")).toBe("100");
+    expect(attr(svg, "image", "y")).toBe("100");
   });
 
-  it("clamps an out-of-range padding ratio to <= 0.9", async () => {
-    const images = fakeImages();
-    await renderCustomSize(
-      { source: new Uint8Array([1]), sourceFormat: "png", width: 1000, height: 1000, background: "transparent", paddingRatio: 5 },
-      images
-    );
-    // Clamped to 0.9 → inner box 100, not a negative/huge value.
-    expect(images.calls[0]).toMatchObject({ width: 100, height: 100 });
+  it("clamps an out-of-range padding ratio to <= 0.9 instead of a negative/huge box", () => {
+    const svg = buildComposedSvg({ pngBytes, width: 1000, height: 1000, background: "white", paddingRatio: 5 });
+    // Clamped to 0.9 → inner box is 1000 * 0.1 = 100.
+    expect(attr(svg, "image", "width")).toBe("100");
+    expect(attr(svg, "image", "height")).toBe("100");
+  });
+
+  it("maps named backgrounds to CSS colors, and omits the rect entirely for transparent", () => {
+    expect(buildComposedSvg({ pngBytes, width: 10, height: 10, background: "white" })).toContain('fill="#ffffff"');
+    expect(buildComposedSvg({ pngBytes, width: 10, height: 10, background: "black" })).toContain('fill="#000000"');
+    const transparent = buildComposedSvg({ pngBytes, width: 10, height: 10, background: "transparent" });
+    expect(transparent).not.toContain("<rect");
+    const nullBg = buildComposedSvg({ pngBytes, width: 10, height: 10, background: null });
+    expect(nullBg).not.toContain("<rect");
+  });
+
+  it("passes an arbitrary CSS color through, escaped for the XML attribute", () => {
+    const svg = buildComposedSvg({ pngBytes, width: 10, height: 10, background: 'rgb(1,2,3)"onerror' });
+    // The literal double-quote must be escaped — an unescaped one would break
+    // out of the attribute and corrupt the SVG the WASM rasteriser parses.
+    expect(svg).toContain("&quot;onerror");
+    expect(svg).not.toContain('"onerror');
+  });
+
+  it("embeds the PNG bytes as a base64 data: URI", () => {
+    const svg = buildComposedSvg({ pngBytes, width: 10, height: 10, background: "white" });
+    const href = attr(svg, "image", "href");
+    expect(href).toBe(`data:image/png;base64,${Buffer.from(pngBytes).toString("base64")}`);
   });
 });

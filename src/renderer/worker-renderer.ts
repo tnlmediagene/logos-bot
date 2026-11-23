@@ -1,37 +1,6 @@
 import { initialize, svg2png } from "svg2png-wasm";
 import { validateDimensions } from "./validate-dimensions";
 
-/**
- * Cloudflare Images binding surface we rely on (subset of ImagesBinding). Typed
- * locally so the module compiles without the full @cloudflare/workers-types
- * Images types, and so the dependency on Images is explicit and narrow.
- *
- * `transform()` and `draw()` both return the same chainable shape (matching
- * the real `ImageTransformer`), so either can be followed by more `draw()`
- * calls or a final `output()`.
- */
-export interface ImageTransformerLike {
-  transform(opts: {
-    width?: number;
-    height?: number;
-    fit?: "scale-down" | "contain" | "pad" | "squeeze" | "cover" | "crop";
-    background?: string;
-  }): ImageTransformerLike;
-  /** Draw `image` onto this one. Omitting all of top/left/bottom/right centers it. */
-  draw(
-    image: ImageTransformerLike,
-    opts?: { opacity?: number; top?: number; left?: number; bottom?: number; right?: number }
-  ): ImageTransformerLike;
-  output(opts: { format: string; background?: string }): Promise<{
-    response(): Response;
-    image(): ReadableStream;
-  }>;
-}
-
-export interface ImagesBindingLike {
-  input(stream: ReadableStream | ArrayBuffer | Uint8Array): ImageTransformerLike;
-}
-
 export interface WorkerRenderRequest {
   /** Raw source bytes (SVG text bytes or PNG bytes). */
   source: Uint8Array;
@@ -54,12 +23,11 @@ let wasmReady: Promise<void> | null = null;
 function ensureWasm(): Promise<void> {
   if (!wasmReady) {
     // The .wasm is imported DYNAMICALLY (not at module top level) so the module
-    // graph stays importable under Node/vitest for the CF-Images-only paths;
-    // the WASM only resolves when the SVG rasteriser actually runs. On Workers,
-    // Wrangler bundles this dynamic import as a WebAssembly.Module (Workers
-    // forbids dynamic WebAssembly.instantiate() of raw bytes, but a module
-    // import is allowed). A failed init clears the cache so a later request
-    // can retry.
+    // graph stays importable under Node/vitest; the WASM only resolves when
+    // the rasteriser actually runs. On Workers, Wrangler bundles this dynamic
+    // import as a WebAssembly.Module (Workers forbids dynamic
+    // WebAssembly.instantiate() of raw bytes, but a module import is
+    // allowed). A failed init clears the cache so a later request can retry.
     wasmReady = (async () => {
       const mod = (await import("svg2png-wasm/svg2png_wasm_bg.wasm")).default;
       await initialize(mod as WebAssembly.Module);
@@ -79,6 +47,16 @@ function backgroundColor(bg: string | null | undefined): string | undefined {
   return bg; // already a CSS color
 }
 
+function escapeXmlAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
 /**
  * Rasterise an SVG to a PNG at its own natural size (svg2png reads the size from
  * the SVG's width/height/viewBox). Transparent background. The Workers
@@ -92,85 +70,85 @@ export async function renderSvgNatural(source: Uint8Array): Promise<WorkerRender
   return { bytes, actualWidth: dims.width, actualHeight: dims.height };
 }
 
-// A 1×1 fully-transparent PNG (68 bytes), used as the base for an exact-size
-// background canvas (see renderCustomSize). A static constant rather than a
-// svg2png-wasm rasterisation: it needs no WASM init, so a PNG-source
-// custom-size render never pays for or depends on the SVG rasteriser, and
-// it's trivially inspectable (decodes to a real 1×1 RGBA PNG — verified with
-// `file`/zlib at the time this was generated, not hand-typed).
-const BLANK_PIXEL_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
+export interface ComposedSvgParams {
+  /** PNG bytes to embed (the logo content, already rasterised if it came from SVG). */
+  pngBytes: Uint8Array;
+  width: number;
+  height: number;
+  background: string | null | undefined;
+  /** Fraction of the canvas reserved as margin around the logo (0–0.9). */
+  paddingRatio?: number;
+}
 
-function blankPixel(): Uint8Array {
-  const binary = atob(BLANK_PIXEL_PNG_BASE64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+/**
+ * Build the wrapper SVG `renderCustomSize` rasterises: a `background`-filled
+ * `<rect>`, then an `<image>` embedding `pngBytes` as a base64 `data:` URI,
+ * sized to the (possibly padding-shrunk) inner box with
+ * `preserveAspectRatio="xMidYMid meet"` (SVG's own "contain, centered" — the
+ * default, spelled out here for clarity).
+ *
+ * Pure string-building, no WASM — split out from `renderCustomSize` so the
+ * positioning/clamping/background math is unit-testable directly.
+ * `svg2png-wasm`'s `.wasm` import only resolves inside Wrangler's bundler
+ * (confirmed: it fails under plain Node/vitest with "Cannot find package
+ * 'wbg'"), so nothing that actually calls `svg2png()` can run in the normal
+ * test suite — real rasterisation here is verified manually via
+ * `wrangler dev`/`--remote`, not by an automated test.
+ */
+export function buildComposedSvg(params: ComposedSvgParams): string {
+  const { pngBytes, width, height, background } = params;
+  const p = Math.min(Math.max(params.paddingRatio ?? 0, 0), 0.9);
+  const innerW = Math.round(width * (1 - p));
+  const innerH = Math.round(height * (1 - p));
+  const offsetX = Math.round((width - innerW) / 2);
+  const offsetY = Math.round((height - innerH) / 2);
+
+  const bg = backgroundColor(background);
+  const bgRect = bg ? `<rect width="${width}" height="${height}" fill="${escapeXmlAttr(bg)}"/>` : "";
+  const b64 = bytesToBase64(pngBytes);
+
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+    bgRect +
+    `<image x="${offsetX}" y="${offsetY}" width="${innerW}" height="${innerH}" ` +
+    `preserveAspectRatio="xMidYMid meet" href="data:image/png;base64,${b64}"/>` +
+    `</svg>`
+  );
 }
 
 /**
  * Render a source to an exact width×height canvas with the logo scaled to fit
  * (preserving aspect ratio), centred, and the requested background filled.
  *
- * SVG source → rasterised by svg2png-wasm first. `paddingRatio` shrinks the
- * fit box so the logo occupies (1 - ratio) of the canvas with equal margin,
- * reproducing the old sharp-composite behaviour (0 = edge-to-edge).
- *
- * Two Images operations, composited rather than chained as two resizes:
- *  1. The logo is `fit: "contain"`-scaled into the (possibly shrunk) inner
- *     box, preserving its own aspect ratio — this is the ONLY resize of the
- *     logo's content, so a deliberate margin (paddingRatio > 0) is never
- *     scaled away by a later step.
- *  2. A blank 1×1 pixel is `fit: "pad"`-expanded to the exact outer
- *     width×height, filled with `background` — `fit: "pad"` is required
- *     here (not `"contain"`), because `"contain"` only guarantees the
- *     content FITS within the box and can return a canvas smaller than
- *     width×height on one axis when the aspect ratios differ; only `"pad"`
- *     (and a few other fit modes) guarantee the output canvas is exactly
- *     the requested size (confirmed against Cloudflare's fit-mode docs).
- * The logo is then `.draw()`n onto that base — omitting every position
- * option centers it automatically, so there is no manual offset math.
+ * Pure svg2png-wasm — no Cloudflare Images binding. The source is rasterised
+ * to PNG first if it was an SVG, then embedded via `buildComposedSvg` (an
+ * `<image>`, regardless of the original source format) and rasterised ONE
+ * more time to the exact requested canvas. SVG's own fit semantics never
+ * have the "does the output canvas actually match the request" ambiguity
+ * that motivated switching an earlier, Cloudflare-Images-based version of
+ * this function from `fit:"contain"` to `fit:"pad"` (see git history), so
+ * there's nothing to get subtly wrong by composing instead of calling a
+ * resize API.
  */
-export async function renderCustomSize(
-  req: WorkerRenderRequest,
-  images: ImagesBindingLike
-): Promise<WorkerRenderResult> {
+export async function renderCustomSize(req: WorkerRenderRequest): Promise<WorkerRenderResult> {
   const { source, sourceFormat, width, height, background } = req;
+  await ensureWasm();
 
-  // Rasterise SVG → PNG bytes first; a PNG source is used as-is.
+  // Rasterise SVG → PNG bytes first; a PNG source is used as-is. Either way,
+  // the result is embedded as an <image>, so both source formats go through
+  // the exact same composition + final-rasterise step.
   let pngBytes: Uint8Array;
   if (sourceFormat === "svg") {
-    await ensureWasm();
     const svgText = new TextDecoder().decode(source);
-    // Rasterise at 2× the target width for crisp downscaling in Images.
-    pngBytes = await svg2png(svgText, { width: width * 2 });
+    // Rasterise at 2× the larger target dimension for a crisp downscale.
+    pngBytes = await svg2png(svgText, { width: Math.max(width, height) * 2 });
   } else {
     pngBytes = source;
   }
 
-  const p = Math.min(Math.max(req.paddingRatio ?? 0, 0), 0.9);
-  const bg = backgroundColor(background);
-  const innerW = Math.round(width * (1 - p));
-  const innerH = Math.round(height * (1 - p));
-
-  const inner = images
-    .input(toArrayBuffer(pngBytes))
-    .transform({ width: innerW, height: innerH, fit: "contain" });
-  const base = images
-    .input(toArrayBuffer(blankPixel()))
-    .transform({ width, height, fit: "pad", background: bg });
-
-  const out = await base.draw(inner, {}).output({ format: "image/png" });
-  const bytes = new Uint8Array(await out.response().arrayBuffer());
+  const composed = buildComposedSvg({ pngBytes, width, height, background, paddingRatio: req.paddingRatio });
+  const bytes = await svg2png(composed, {});
   return { bytes, actualWidth: width, actualHeight: height };
-}
-
-/** Copy a Uint8Array into a fresh, exactly-sized ArrayBuffer. */
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength
-  ) as ArrayBuffer;
 }
 
 /** Read width/height from a PNG's IHDR chunk (bytes 16..24). */

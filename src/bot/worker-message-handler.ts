@@ -8,7 +8,6 @@ import {
   renderSvgNatural,
   renderCustomSize,
   validateDimensions,
-  ImagesBindingLike,
 } from "../renderer/worker-renderer";
 import { buildQuestionMessage, buildErrorMessage, buildDeliveryMessage, buildWhiteLogoWarning, SlackMessage } from "./response-builder";
 import { buildNoMatchMessage } from "./worker-no-match";
@@ -39,8 +38,6 @@ export interface MessageDeps {
   resolver: AssetResolver;
   repo: CatalogReader;
   driveClient: DriveClient;
-  /** Cloudflare Images binding — needed only for custom-size renders. */
-  images: ImagesBindingLike;
   /** Max allowed output dimension (MAX_OUTPUT_SIZE). */
   maxOutputSize: number;
 }
@@ -62,7 +59,7 @@ function conversationKey(teamId: string, userId: string): string {
  * `teamId:userId` (see `conversationKey`) so installs never cross-talk.
  *
  * Delivery handles all three paths: direct download (SVG/AI/PNG as-is), natural
- * PNG (svg2png-wasm), and custom size (svg2png-wasm + Cloudflare Images).
+ * PNG (svg2png-wasm), and custom size (svg2png-wasm, no Cloudflare Images).
  */
 export async function handleMessage(
   text: string,
@@ -218,7 +215,7 @@ async function resolveOrNoMatch(
  *  - direct download: upload the original bytes (SVG / AI, or a PNG with no
  *    custom size requested);
  *  - natural PNG: rasterise the SVG at its own size (svg2png-wasm);
- *  - custom size: render to the requested canvas (svg2png-wasm + CF Images).
+ *  - custom size: render to the requested canvas (svg2png-wasm only).
  */
 async function deliver(result: ResolvedAsset, deps: MessageDeps, ports: MessagePorts): Promise<void> {
   const { asset } = result;
@@ -249,17 +246,14 @@ async function deliver(result: ResolvedAsset, deps: MessageDeps, ports: MessageP
       return;
     }
     const source = await deps.driveClient.downloadFile(asset.source_drive_file_id);
-    const rendered = await renderCustomSize(
-      {
-        source,
-        sourceFormat: asset.format === "svg" ? "svg" : "png",
-        width,
-        height,
-        background: result.background && result.background !== "transparent" ? result.background : "transparent",
-        paddingRatio: result.paddingRatio ?? 0,
-      },
-      deps.images
-    );
+    const rendered = await renderCustomSize({
+      source,
+      sourceFormat: asset.format === "svg" ? "svg" : "png",
+      width,
+      height,
+      background: result.background && result.background !== "transparent" ? result.background : "transparent",
+      paddingRatio: result.paddingRatio ?? 0,
+    });
     await ports.uploadFile(rendered.bytes, pngName, pngName);
     if (
       asset.color === "white" &&
