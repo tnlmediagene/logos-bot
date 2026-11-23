@@ -43,8 +43,11 @@ describe("buildSyncSql", () => {
     expect(sql).not.toMatch(/CREATE\s+TABLE/i);
     expect(sql).not.toMatch(/ALTER\s+TABLE/i);
     expect(sql).not.toMatch(/DROP\s+TABLE/i);
-    expect(sql).toContain("BEGIN TRANSACTION;");
-    expect(sql).toContain("COMMIT;");
+    // Remote D1's exec endpoint rejects explicit BEGIN/SAVEPOINT — the whole
+    // file is sent as one batch and applied atomically by D1 itself.
+    expect(sql).not.toMatch(/BEGIN\s+TRANSACTION/i);
+    expect(sql).not.toMatch(/\bCOMMIT\b/i);
+    expect(sql).not.toMatch(/SAVEPOINT/i);
   });
 
   it("resets every scan-owned table and inserts its rows", () => {

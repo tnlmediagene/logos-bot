@@ -47,12 +47,19 @@ function insertStatement(table: string, columns: string[], row: Row): string {
  * Build a D1-safe, DATA-ONLY sync script from a local SQLite catalog.
  *
  * The remote schema is owned by `wrangler d1 migrations` — this script emits NO
- * DDL. It wraps the whole thing in one transaction and, for each scan-owned
- * table, does `DELETE FROM` then re-inserts every row, so running it against a
- * remote D1 produces exactly the local scan state and is safe to re-run.
+ * DDL. For each scan-owned table it does `DELETE FROM` then re-inserts every
+ * row, so running it against a remote D1 produces exactly the local scan state
+ * and is safe to re-run.
+ *
+ * No explicit BEGIN/COMMIT: `wrangler d1 execute` sends the whole file as one
+ * batch, which D1 already applies atomically, and the remote D1 HTTP exec
+ * endpoint rejects explicit `BEGIN TRANSACTION`/`SAVEPOINT` statements outright
+ * ("use state.storage.transaction() instead") — this was only ever exercised
+ * against local D1 (plain SQLite, no such restriction) until the first real
+ * `--remote` run surfaced it.
  *
  * Delete order is child→parent (assets refs brands/scanner_runs); insert order
- * is parent→child, so foreign keys never dangle mid-transaction.
+ * is parent→child, so foreign keys never dangle mid-batch.
  */
 export function buildSyncSql(db: Database.Database): string {
   const lines: string[] = [];
@@ -60,7 +67,6 @@ export function buildSyncSql(db: Database.Database): string {
   lines.push("-- DATA ONLY. Remote schema is managed by wrangler d1 migrations.");
   lines.push("-- Idempotent: resets scan-owned tables then reloads them.");
   lines.push("PRAGMA defer_foreign_keys = TRUE;");
-  lines.push("BEGIN TRANSACTION;");
 
   // Reset child→parent so FK references are cleared before their targets.
   for (const table of [...SCAN_OWNED_TABLES].reverse()) {
@@ -83,7 +89,6 @@ export function buildSyncSql(db: Database.Database): string {
     }
   }
 
-  lines.push("COMMIT;");
   lines.push("");
   return lines.join("\n");
 }
