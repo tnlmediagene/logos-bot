@@ -20,7 +20,7 @@
     {
       "binding": "DB",
       "database_name": "logos-bot-catalog",
-      "database_id": "REPLACE_WITH_D1_DATABASE_ID",
+      "database_id": "01b983c0-98b8-4d51-ab10-6c29e97333e7",
       "migrations_dir": "migrations"
     }
   ],
@@ -31,7 +31,7 @@
   "kv_namespaces": [
     {
       "binding": "CONVERSATIONS",
-      "id": "REPLACE_WITH_KV_NAMESPACE_ID"
+      "id": "9b734636eac04572bc3183c33b55fc83"
     }
   ],
 
@@ -45,8 +45,8 @@
     "AI_PROVIDER": "vertex",
     "GEMINI_MODEL": "gemini-2.5-flash",
     "MAX_OUTPUT_SIZE": "4096",
-    "DRIVE_ROOT_FOLDER_ID": "",
-    "VERTEX_PROJECT_ID": "",
+    "DRIVE_ROOT_FOLDER_ID": "1Y6avk_W5jRsl5Ab-PWiBvOo_AFGoFEv2",
+    "VERTEX_PROJECT_ID": "logos-bot-515608",
     "VERTEX_LOCATION": "us-central1",
     "AUDIT_NOTIFY_CHANNELS": ""
   }
