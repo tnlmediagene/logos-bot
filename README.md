@@ -1,22 +1,24 @@
 # logos-bot
 
 Slack bot：私訊它要哪個品牌的 logo（格式、顏色、尺寸可用按鈕一步步選），它從 Google
-Drive 找出對應檔案，直接上傳回 Slack。跑在 Cloudflare Workers 上，任何 TNL
-Mediagene 家族的 workspace 都能自助安裝。
+Drive 找出對應檔案，直接上傳回 Slack。跑在 Cloudflare Workers 上，TNL Mediagene
+家族已核准的 workspace 可以自助安裝。
 
 ## 怎麼用
 
 在 Slack 私訊這個 bot，直接打品牌名稱（例如「TNL」「關鍵評論網」「INSIDE」），依指示
 用按鈕選格式／顏色／尺寸，最後答一句用途就會收到檔案。
 
-其他 workspace 要安裝，打開：
+其他（已核准的）workspace 要安裝，打開：
 
 ```
 https://logos-bot.thenewslens.workers.dev/slack/install
 ```
 
 授權一次即可，不需要任何人手動設定 token——所有安裝的 workspace 共用同一份品牌
-目錄（這是同一個集團內部自助安裝的設計，不是對外的多租戶產品）。
+目錄（這是同一個集團內部自助安裝的設計，不是對外的多租戶產品）。哪些 team id
+可以安裝由 `SLACK_ALLOWED_TEAM_IDS` 這個 allowlist 把關（見下方部署章節）——
+沒在清單上的 workspace 走完 OAuth 流程也會被拒絕，剛發出的 token 也會立刻撤銷。
 
 ## 架構
 
@@ -28,6 +30,7 @@ https://logos-bot.thenewslens.workers.dev/slack/install
 | 品牌／資產目錄 | **D1**（`src/catalog/d1-catalog-repo.ts`） |
 | 多輪對話狀態 | **KV**（`CONVERSATIONS` binding，TTL） |
 | 各 workspace 的安裝資訊（bot token） | **KV**（`INSTALLATIONS` binding，`KVInstallationStore`） |
+| OAuth 安裝流程的 state 參數（CSRF 防護） | **KV**（`OAUTH_STATES` binding，`KVStateStore`） |
 | SVG → PNG 算圖、自訂尺寸 / 底色 | `svg2png-wasm`（純 SVG 合成，不依賴 Cloudflare Images） |
 | Google Drive / Vertex 認證 | 純 `fetch` + WebCrypto 自簽 JWT（`src/google-auth.ts`，無 `googleapis` SDK） |
 
@@ -87,8 +90,10 @@ pnpm sync:d1:remote     # 推進正式 D1
 pnpm deploy
 ```
 
-Worker 需要的 bindings 定義在 `wrangler.jsonc`（D1、兩個 KV namespace）。
-Secrets 用 `wrangler secret put <NAME>` 設定，本機開發對照
+Worker 需要的 bindings 定義在 `wrangler.jsonc`（D1、三個 KV namespace）。
+新 workspace 要能安裝，team id 要先加進 `wrangler.jsonc` 的
+`SLACK_ALLOWED_TEAM_IDS`（逗號分隔的非密鑰 var）——留空或沒設等於「全部拒絕」，
+不是「全部放行」。Secrets 用 `wrangler secret put <NAME>` 設定，本機開發對照
 `.dev.vars.example`：
 
 | Secret | 用途 |

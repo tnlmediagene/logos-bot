@@ -1,4 +1,4 @@
-import { SlackOAuthApp, KVInstallationStore } from "slack-cloudflare-workers";
+import { SlackOAuthApp, KVInstallationStore, KVStateStore, Installation } from "slack-cloudflare-workers";
 import type { Env } from "./env";
 import brandsConfig from "../config/brands.json";
 import { D1CatalogRepo } from "./catalog/d1-catalog-repo";
@@ -40,6 +40,65 @@ export function getGoogleAuth(serviceAccountKey: string, scope: string): AccessT
 function parseNotifyChannels(raw: string | undefined): string[] {
   if (!raw) return [];
   return raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Comma/space-separated Slack team id allowlist → trimmed non-empty entries. */
+export function parseAllowedTeamIds(raw: string | undefined): Set<string> {
+  if (!raw) return new Set();
+  return new Set(raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean));
+}
+
+/**
+ * Whether an OAuth install's team may be accepted. This bot is for TNL
+ * Mediagene's own workspaces, sharing one D1 catalog and Drive service
+ * account — not a public/multi-tenant install target, so an UNCONFIGURED
+ * (empty) allowlist means reject everything, not allow everything.
+ */
+export function isTeamAllowed(teamId: string | undefined, allowed: Set<string>): boolean {
+  return !!teamId && allowed.has(teamId);
+}
+
+/**
+ * Best-effort: invalidate a bot token Slack just issued for an install we're
+ * about to refuse. The token is never persisted (handled before
+ * `installationStore.save`), but revoking it too closes the window where a
+ * valid-but-unused token exists at all. Logged, never thrown — a revoke
+ * failure must not turn into a worse error than the rejection itself.
+ */
+async function revokeInstallationToken(token: string): Promise<void> {
+  try {
+    const res = await fetch("https://slack.com/api/auth.revoke", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json()) as { ok?: boolean; error?: string };
+    if (!data.ok) console.error("auth.revoke failed for a rejected install:", data.error);
+  } catch (err) {
+    console.error("auth.revoke request failed for a rejected install:", err);
+  }
+}
+
+const REJECTED_TEAM_MESSAGE =
+  "This Slack app is restricted to approved TNL Mediagene workspaces. " +
+  "Contact the app owner if you believe this is a mistake.";
+
+/**
+ * `SlackOAuthApp`'s `oauth.afterInstallation` hook — despite the name, it
+ * runs AFTER Slack issues the token but BEFORE `installationStore.save(...)`
+ * persists it (see slack-edge's oauth-app.ts), so returning a Response here
+ * aborts the install before it's ever treated as active. This is the
+ * enforcement point for `allowedTeamIds`: without it, OAuth here accepted an
+ * installation from ANY Slack workspace, and every install shares the same
+ * D1 catalog + Drive service account, so an unapproved workspace could read
+ * TNL Mediagene's internal brand assets just by completing the install flow.
+ */
+export function buildAfterInstallationHook(allowedTeamIds: Set<string>) {
+  return async ({ installation }: { installation: Installation }): Promise<Response | undefined> => {
+    if (isTeamAllowed(installation.team_id, allowedTeamIds)) return undefined;
+    if (installation.bot_token) await revokeInstallationToken(installation.bot_token);
+    console.error(`Rejected OAuth install from unapproved team: ${installation.team_id ?? "(unknown)"}`);
+    return new Response(REJECTED_TEAM_MESSAGE, { status: 403 });
+  };
 }
 
 /**
@@ -119,7 +178,10 @@ function buildPorts(
  * All installed workspaces share the SAME catalog (D1 + Drive) — this bot is
  * for TNL Mediagene's own brand assets across its own workspaces, not a
  * multi-tenant product; OAuth here is self-install convenience, not data
- * isolation between unrelated orgs.
+ * isolation between unrelated orgs. Because of that sharing, WHICH
+ * workspaces may install at all is gated by `SLACK_ALLOWED_TEAM_IDS` (see
+ * `buildAfterInstallationHook`) — an unapproved workspace completing the
+ * OAuth flow gets refused before its token is ever persisted.
  *
  * Two listeners drive the guided flow:
  *  - `app.message` handles free-text DM replies (brand name, purpose, custom
@@ -138,6 +200,13 @@ export function createSlackApp(env: Env, ctx?: ExecutionContext): SlackOAuthApp<
   const app = new SlackOAuthApp({
     env,
     installationStore: new KVInstallationStore(env, env.INSTALLATIONS),
+    // Server-side state store (CSRF protection for the install flow) —
+    // without it the OAuth flow falls back to a browser cookie alone to
+    // verify the callback matches the request that started it.
+    stateStore: new KVStateStore(env.OAUTH_STATES),
+    oauth: {
+      afterInstallation: buildAfterInstallationHook(parseAllowedTeamIds(env.SLACK_ALLOWED_TEAM_IDS)),
+    },
     routes: {
       events: "/slack/events",
       oauth: { start: "/slack/install", callback: "/slack/oauth_redirect" },

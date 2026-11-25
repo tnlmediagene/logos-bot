@@ -16,6 +16,10 @@ export interface Env {
   // slack-cloudflare-workers' KVInstallationStore. Separate from
   // CONVERSATIONS: installs persist indefinitely, conversation state doesn't.
   INSTALLATIONS: KVNamespace;
+  // OAuth `state` parameter store (CSRF protection for the install flow), via
+  // slack-cloudflare-workers' KVStateStore. Short-lived (5 min TTL) entries,
+  // one per in-flight install attempt.
+  OAUTH_STATES: KVNamespace;
   // No Cloudflare Images binding — custom-size rendering is pure svg2png-wasm
   // (see src/renderer/worker-renderer.ts). It needs no account-level Images
   // product or billing plan.
@@ -27,6 +31,10 @@ export interface Env {
   // OAuth app-installation flow (slack-edge's SlackOAuthEnv shape).
   SLACK_BOT_SCOPES: string;
   SLACK_REDIRECT_URI: string;
+  // Comma-separated Slack team id allowlist for OAuth installs — see
+  // slack-app.ts's `isTeamAllowed`. Empty/unset means no installs are
+  // accepted (fail closed), not "allow all".
+  SLACK_ALLOWED_TEAM_IDS: string;
 
   // --- Secrets (wrangler secret put) ---
   // Optional: with OAuth installs, each workspace's bot token comes from

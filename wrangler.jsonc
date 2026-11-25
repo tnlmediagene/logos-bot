@@ -33,6 +33,12 @@
   // KVInstallationStore. Separate from CONVERSATIONS: installs persist
   // indefinitely, conversation state doesn't.
   // Create with:  wrangler kv namespace create INSTALLATIONS
+  //
+  // OAUTH_STATES — the OAuth `state` parameter (CSRF protection for the
+  // install flow), via KVStateStore. Without a server-side store the library
+  // falls back to a browser cookie alone to verify the callback matches the
+  // request that started it; a dedicated KV store is the documented,
+  // stronger setup. Entries self-expire (5 min TTL, set by KVStateStore).
   "kv_namespaces": [
     {
       "binding": "CONVERSATIONS",
@@ -41,6 +47,10 @@
     {
       "binding": "INSTALLATIONS",
       "id": "100886c1f6ae45edb64b08b687abac14"
+    },
+    {
+      "binding": "OAUTH_STATES",
+      "id": "d99bb75c856943b5a6d05ccdd2fc549d"
     }
   ],
 
@@ -66,6 +76,14 @@
     "SLACK_BOT_SCOPES": "chat:write,files:write,im:history",
     // Must exactly match a Redirect URL registered on the Slack App's
     // OAuth & Permissions page.
-    "SLACK_REDIRECT_URI": "https://logos-bot.thenewslens.workers.dev/slack/oauth_redirect"
+    "SLACK_REDIRECT_URI": "https://logos-bot.thenewslens.workers.dev/slack/oauth_redirect",
+    // Comma-separated allowlist of Slack team ids this app will accept an
+    // OAuth installation from — this bot is for TNL Mediagene's own
+    // workspaces, not a public/multi-tenant install target. These three are
+    // the workspaces already installed (confirmed via
+    // `wrangler kv key list --binding INSTALLATIONS --remote`) at the time
+    // this allowlist was introduced. Empty/unset means NO installs are
+    // accepted (fail closed) — add a new team id here before it can install.
+    "SLACK_ALLOWED_TEAM_IDS": "T024ZEPMW,T03K53XHQ,T04MQ14QF"
   }
 }
