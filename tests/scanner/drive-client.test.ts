@@ -104,3 +104,37 @@ describe("DriveClient.downloadFile", () => {
     expect(String(fn.mock.calls[0][0])).toContain("alt=media");
   });
 });
+
+// Regression coverage for a Copilot PR review finding: `request()` used to
+// clear its abort timer the moment `fetch()` resolved with a Response,
+// before `downloadFile`/`listFolder`/`getWebViewLink` ever read the body —
+// so a connection that stalled while STREAMING the body (headers back fine,
+// then nothing) was no longer bounded by any timeout at all.
+describe("DriveClient request timeout covers body consumption, not just headers", () => {
+  it("aborts a download whose body stalls past the timeout, even though fetch() itself resolved immediately", async () => {
+    // A short timeout so the test runs fast — real behavior, not fake timers
+    // (AbortSignal.timeout schedules internally, below the layer vitest's
+    // fake timers can intercept).
+    const client = new DriveClient(tokenProvider, 20);
+    const fn = vi.fn(async (_url: unknown, init: RequestInit) => ({
+      ok: true,
+      status: 200,
+      // fetch() "returns" right away (this async function resolves with no
+      // delay), but reading the body stalls for 200ms — far past the 20ms
+      // timeout. If the request's AbortSignal is still live at this point,
+      // the stall must cause this promise to reject, not just hang/succeed.
+      arrayBuffer: () =>
+        new Promise((resolve, reject) => {
+          const stall = setTimeout(() => resolve(new Uint8Array([1]).buffer), 200);
+          init.signal?.addEventListener("abort", () => {
+            clearTimeout(stall);
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+      text: async () => "",
+    }));
+    vi.stubGlobal("fetch", fn);
+
+    await expect(client.downloadFile("file-1")).rejects.toThrow(/aborted/i);
+  });
+});

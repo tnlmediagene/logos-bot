@@ -28,6 +28,9 @@ export function formatForName(name: string): "svg" | "png" | "ai" | null {
 // Per-request network timeout (ms). Without it a hung connection blocks a whole
 // scan forever — a stuck download once idled a scan for over 30 minutes. On
 // timeout the fetch aborts, which the scanner catches (dimensions left null).
+// Bounds the WHOLE request including body streaming (see `request()`) — a
+// connection that stalls while a caller is still reading `.json()` /
+// `.arrayBuffer()` is just as much a hang as one that never gets headers back.
 const REQUEST_TIMEOUT_MS = 30_000;
 const SUPPORTED_MIMES = new Set([
   "image/svg+xml",
@@ -56,17 +59,21 @@ interface DriveFilesListResponse {
  */
 export class DriveClient {
   private readonly auth: AccessTokenProvider;
+  private readonly requestTimeoutMs: number;
 
   /**
    * Accepts either a service-account key JSON string (convenience, builds the
    * provider internally) or a ready AccessTokenProvider (so a Worker can share
-   * one cached token source across Drive + Vertex).
+   * one cached token source across Drive + Vertex). `requestTimeoutMs`
+   * defaults to `REQUEST_TIMEOUT_MS`; overridable so tests can exercise the
+   * timeout without a real 30s wait.
    */
-  constructor(keyOrProvider: string | AccessTokenProvider) {
+  constructor(keyOrProvider: string | AccessTokenProvider, requestTimeoutMs: number = REQUEST_TIMEOUT_MS) {
     this.auth =
       typeof keyOrProvider === "string"
         ? createGoogleAuth(keyOrProvider, DRIVE_SCOPE)
         : keyOrProvider;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
   private async authHeader(): Promise<string> {
@@ -75,19 +82,25 @@ export class DriveClient {
     return `Bearer ${token}`;
   }
 
+  /**
+   * `AbortSignal.timeout(...)` rather than a manually cleared `setTimeout` +
+   * `AbortController`: the earlier version cleared its timer the moment
+   * `fetch()` returned a `Response`, but `listFolder`/`downloadFile`/
+   * `getWebViewLink` all consume the body AFTER `request()` returns
+   * (`.json()`/`.arrayBuffer()`) — so a connection that stalled while
+   * streaming the body was no longer bounded by any timeout at all. A signal
+   * built with `AbortSignal.timeout` stays live for as long as the same
+   * fetch (headers AND body) is in flight, and aborts it — surfacing as the
+   * body-read promise rejecting — the instant the deadline passes.
+   */
   private async request(url: string, init?: RequestInit): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-    try {
-      const res = await fetch(url, {
-        ...init,
-        headers: { authorization: await this.authHeader(), ...(init?.headers || {}) },
-        signal: controller.signal,
-      });
-      return res;
-    } finally {
-      clearTimeout(timer);
-    }
+    const signal = AbortSignal.timeout(this.requestTimeoutMs);
+    const authorization = await this.authHeader();
+    return fetch(url, {
+      ...init,
+      headers: { authorization, ...(init?.headers || {}) },
+      signal,
+    });
   }
 
   async listFolder(folderId: string): Promise<DriveFile[]> {
