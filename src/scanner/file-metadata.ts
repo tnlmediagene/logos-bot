@@ -39,11 +39,11 @@ export function extractSvgDimensions(svgContent: string): SvgDimensions | null {
  * or when dimensions can't be determined.
  */
 export function extractIntrinsicDimensions(
-  buffer: Buffer,
+  buffer: Uint8Array,
   mimeType: string
 ): PngDimensions | null {
   if (mimeType === "image/svg+xml") {
-    const svg = extractSvgDimensions(buffer.toString("utf-8"));
+    const svg = extractSvgDimensions(new TextDecoder("utf-8").decode(buffer));
     if (!svg) return null;
     // Prefer explicit width/height; fall back to the viewBox extents.
     const width = svg.width ?? svg.viewBoxWidth;
@@ -56,17 +56,20 @@ export function extractIntrinsicDimensions(
   return null;
 }
 
-export function extractPngDimensions(buffer: Buffer): PngDimensions | null {
+const PNG_SIGNATURE = [137, 80, 78, 71, 13, 10, 26, 10];
+
+export function extractPngDimensions(buffer: Uint8Array): PngDimensions | null {
   // PNG header: 8 bytes signature, then IHDR chunk
   // IHDR starts at byte 8: 4 bytes length, 4 bytes "IHDR", 4 bytes width, 4 bytes height
   if (buffer.length < 24) return null;
 
-  const signature = buffer.slice(0, 8);
-  const pngSig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
-  if (!signature.equals(pngSig)) return null;
+  for (let i = 0; i < PNG_SIGNATURE.length; i++) {
+    if (buffer[i] !== PNG_SIGNATURE[i]) return null;
+  }
 
-  const width = buffer.readUInt32BE(16);
-  const height = buffer.readUInt32BE(20);
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const width = view.getUint32(16, false);
+  const height = view.getUint32(20, false);
 
   if (width === 0 || height === 0) return null;
   return { width, height };

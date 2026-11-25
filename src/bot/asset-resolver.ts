@@ -1,4 +1,5 @@
-import { CatalogRepo, AssetRecord } from "../catalog/catalog-repo";
+import { AssetRecord } from "../catalog/catalog-repo";
+import { CatalogReader } from "../catalog/catalog-reader";
 import { ConversationState } from "./conversation";
 
 /** ResolvedAsset fields that don't depend on the direct-vs-render decision. */
@@ -24,9 +25,9 @@ export interface ResolvedAsset {
 }
 
 export class AssetResolver {
-  constructor(private repo: CatalogRepo) {}
+  constructor(private repo: CatalogReader) {}
 
-  resolve(state: ConversationState): ResolvedAsset | null {
+  async resolve(state: ConversationState): Promise<ResolvedAsset | null> {
     if (!state.resolvedBrandId) return null;
     const p = state.parsed;
 
@@ -38,7 +39,7 @@ export class AssetResolver {
     if (p.asset_type) query.asset_type = p.asset_type;
     if (p.layout) query.layout = p.layout;
 
-    const assets = this.repo.findAssets(query);
+    const assets = await this.repo.findAssets(query);
     if (assets.length === 0) return null;
 
     const svg = assets.find((a) => a.format === "svg") ?? null;

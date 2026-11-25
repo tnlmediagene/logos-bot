@@ -2,11 +2,23 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { CatalogRepo, AssetRecord } from "../src/catalog/catalog-repo";
+import { CatalogRepo, AssetRecord, AssetQuery } from "../src/catalog/catalog-repo";
+import { CatalogReader } from "../src/catalog/d1-catalog-repo";
 import { ConversationManager } from "../src/bot/conversation";
 import { AssetResolver } from "../src/bot/asset-resolver";
 import { buildDeliveryMessage } from "../src/bot/response-builder";
-import { validateDimensions } from "../src/renderer/renderer";
+import { validateDimensions } from "../src/renderer/validate-dimensions";
+
+/** Async CatalogReader over the sync sqlite repo (see asset-resolver.test.ts). */
+function asReader(repo: CatalogRepo): CatalogReader {
+  return {
+    getBrandById: async (id) => repo.getBrandById(id),
+    getAllBrands: async () => repo.getAllBrands(),
+    getActiveAssets: async (brandId) => repo.getActiveAssets(brandId),
+    findAssets: async (query: AssetQuery) => repo.findAssets(query),
+    recordDelivery: async (row) => repo.recordDelivery(row),
+  };
+}
 
 function createTestDb(): Database.Database {
   const db = new Database(":memory:");
@@ -62,12 +74,12 @@ describe("Integration: full request flow", () => {
   beforeEach(() => {
     db = createTestDb();
     repo = new CatalogRepo(db);
-    resolver = new AssetResolver(repo);
+    resolver = new AssetResolver(asReader(repo));
     conversationManager = new ConversationManager();
     seedCatalog(repo);
   });
 
-  it("full flow: '我要 TNL 藍色 SVG' with brand disambiguation", () => {
+  it("full flow: '我要 TNL 藍色 SVG' with brand disambiguation", async () => {
     // Simulate parsed request (rule-first parser returns brandCandidates)
     const parsed = {
       brand: null,
@@ -104,7 +116,7 @@ describe("Integration: full request flow", () => {
     expect(updated.purposeUrl).toBe("https://fb.com/p/1");
 
     // Resolve asset
-    const result = resolver.resolve(updated);
+    const result = await resolver.resolve(updated);
     expect(result).not.toBeNull();
     expect(result!.asset.id).toBe("tnl-logo-blue-svg");
     expect(result!.needsCustomSize).toBe(false);
@@ -114,7 +126,7 @@ describe("Integration: full request flow", () => {
     expect(msg.text).toContain("logo-blue.svg");
   });
 
-  it("full flow: custom size request '關鍵評論網 500x500'", () => {
+  it("full flow: custom size request '關鍵評論網 500x500'", async () => {
     const parsed = {
       brand: "the-news-lens",
       brandCandidates: ["the-news-lens"],
@@ -135,7 +147,7 @@ describe("Integration: full request flow", () => {
     state.resolvedBrandId = brands[0].id;
 
     // Should resolve to SVG for custom size
-    const result = resolver.resolve(state);
+    const result = await resolver.resolve(state);
     expect(result).not.toBeNull();
     expect(result!.asset.format).toBe("svg");
     expect(result!.needsCustomSize).toBe(true);

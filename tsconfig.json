@@ -13,5 +13,17 @@
     "resolveJsonModule": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/worker.ts",
+    "src/env.ts",
+    "src/slack-app.ts",
+    "src/wasm.d.ts",
+    "src/bot/worker-message-handler.ts",
+    "src/bot/worker-audit.ts",
+    "src/bot/kv-conversation-store.ts",
+    "src/catalog/d1-catalog-repo.ts",
+    "src/renderer/worker-renderer.ts"
+  ]
 }

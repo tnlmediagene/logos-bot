@@ -1,4 +1,4 @@
-import { DriveClient, DriveFile } from "./drive-client";
+import { DriveClient } from "./drive-client";
 import { isSkippedPath } from "../catalog/brand-inference";
 
 export interface DriveFolder {

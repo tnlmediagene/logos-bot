@@ -1,0 +1,32 @@
+{
+  // Typecheck config for the Cloudflare Workers side (worker.ts, env.ts, and the
+  // Workers-only modules added in later stages). The existing Node build keeps
+  // using tsconfig.json; this file swaps in the Workers runtime lib/types.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "types": ["@cloudflare/workers-types"],
+    "noEmit": true,
+    "rootDir": ".",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/worker.ts",
+    "src/env.ts",
+    "src/wasm.d.ts",
+    "src/slack-app.ts",
+    "src/catalog/catalog-reader.ts",
+    "src/bot/worker-message-handler.ts",
+    "src/bot/worker-audit.ts",
+    "src/bot/kv-conversation-store.ts",
+    "src/renderer/worker-renderer.ts",
+    "src/google-auth.ts",
+    "src/scanner/drive-client.ts",
+    "src/scanner/file-metadata.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
+}

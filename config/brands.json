@@ -8,30 +8,12 @@
     ],
     "notes": ""
   },
-  "agentm-電影神搜": {
-    "aliases": [
-      "AgentMovie 電影神搜",
-      "神搜",
-      "agentmovie",
-      "agent movie"
-    ],
-    "notes": ""
-  },
   "becoming-aces-未來大人物": {
     "aliases": [
       "Becoming Aces 未來大人物",
       "大人物",
       "未來大人物",
       "becoming aces"
-    ],
-    "notes": ""
-  },
-  "businessyee-商益": {
-    "aliases": [
-      "Businessyee 商益",
-      "商益",
-      "business yee",
-      "businessyee"
     ],
     "notes": ""
   },
@@ -51,26 +33,11 @@
     ],
     "notes": ""
   },
-  "daex-達斯": {
-    "aliases": [
-      "DaEX 達斯",
-      "達斯",
-      "daex"
-    ],
-    "notes": ""
-  },
   "dmi-威緒": {
     "aliases": [
       "DMI 威緒",
       "dmi",
       "威緒"
-    ],
-    "notes": ""
-  },
-  "every-little-d": {
-    "aliases": [
-      "every little d",
-      "eld"
     ],
     "notes": ""
   },
@@ -103,14 +70,6 @@
       "INSIDE",
       "硬塞",
       "硬塞的"
-    ],
-    "notes": ""
-  },
-
-  "shareparty": {
-    "aliases": [
-      "ShareParty",
-      "share party"
     ],
     "notes": ""
   },
@@ -151,25 +110,12 @@
     ],
     "notes": ""
   },
-  "tnl-research": {
-    "aliases": [
-      "TNL Research"
-    ],
-    "notes": ""
-  },
   "士奇傳播": {
     "aliases": [
       "士奇傳播",
       "士奇",
       "IMC digital",
       "scweb"
-    ],
-    "notes": ""
-  },
-  "7nanatural": {
-    "aliases": [
-      "7Nanatural",
-      "7 nana"
     ],
     "notes": ""
   },
@@ -182,125 +128,8 @@
     ],
     "notes": ""
   },
-  "costory": {
-    "aliases": [
-      "CoSTORY",
-      "co story"
-    ],
-    "notes": ""
-  },
-  "digiday": {
-    "aliases": [
-      "DIGIDAY"
-    ],
-    "notes": ""
-  },
-  "fumumu": {
-    "aliases": [
-      "fumumu"
-    ],
-    "notes": ""
-  },
-  "fuze": {
-    "aliases": [
-      "FUZE"
-    ],
-    "notes": ""
-  },
-  "giz-yatai": {
-    "aliases": [
-      "GIZ-YATAI"
-    ],
-    "notes": ""
-  },
-  "gizmodo": {
-    "aliases": [
-      "GIZMODO",
-      "giz modo"
-    ],
-    "notes": ""
-  },
-  "glossy": {
-    "aliases": [
-      "GLOSSY"
-    ],
-    "notes": ""
-  },
-  "infobahn": {
-    "aliases": [
-      "INFOBAHN"
-    ],
-    "notes": ""
-  },
-  "lifehacker": {
-    "aliases": [
-      "Lifehacker",
-      "LH",
-      "life hacker"
-    ],
-    "notes": ""
-  },
-  "machi-ya": {
-    "aliases": [
-      "machi-ya",
-      "machiya",
-      "machi"
-    ],
-    "notes": ""
-  },
-  "mashing-up": {
-    "aliases": [
-      "MASHING UP",
-      "mashingup",
-      "mu"
-    ],
-    "notes": ""
-  },
-  "modern-retail": {
-    "aliases": [
-      "modern-retail"
-    ],
-    "notes": ""
-  },
-  "money-insider": {
-    "aliases": [
-      "MONEY INSIDER",
-      "money-insider"
-    ],
-    "notes": ""
-  },
-  "roomie": {
-    "aliases": [
-      "ROOMIE"
-    ],
-    "notes": ""
-  },
-  "roomie-kitchen": {
-    "aliases": [
-      "ROOMIE-kitchen"
-    ],
-    "notes": ""
-  },
-  "sirabee": {
-    "aliases": [
-      "Sirabee"
-    ],
-    "notes": ""
-  },
-  "tech-insider": {
-    "aliases": [
-      "Tech Insider",
-      "techinsider",
-      "tech-insider"
-    ],
-    "notes": ""
-  },
-  "health-insider": {
-    "aliases": [
-      "Health Insider",
-      "health insider",
-      "health-insider"
-    ],
+  "tnl-digitech-group": {
+    "aliases": [],
     "notes": ""
   }
 }

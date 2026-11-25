@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
-import { readFileSync } from "fs";
+import { readFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { runFullScan } from "../../src/scanner/run-scan";
 import { DriveClient, DriveFile } from "../../src/scanner/drive-client";
-import { AiProvider } from "../../src/ai/provider";
-import { AiBuilder } from "../../src/catalog/ai-builder";
+import { MetadataBuilder } from "../../src/catalog/ai-builder";
+import { inferBrand } from "../../src/catalog/brand-inference";
 import { CatalogRepo } from "../../src/catalog/catalog-repo";
 
 function createTestDb(): Database.Database {
@@ -80,13 +80,18 @@ const pngFile = (id: string, name: string, modifiedTime: string): DriveFile => (
   size: 100,
 });
 
-// Counts generateStructured calls so tests can assert how many files hit AI.
-function countingProvider(): { provider: AiProvider; calls: () => number } {
+// Counts buildAssetMetadata calls so tests can assert how many files were
+// (re-)processed. Stands in for the old AiBuilder+AiProvider pair (removed
+// along with the rest of the unused AI-assisted-scan stack) — the incremental
+// logic under test only cares that the builder is called, not what calls it.
+function countingProvider(): { provider: MetadataBuilder; calls: () => number } {
   let calls = 0;
-  const provider: AiProvider = {
-    generateStructured: async () => {
+  const provider: MetadataBuilder = {
+    buildAssetMetadata: async (file) => {
       calls++;
+      const brand = inferBrand(`${file.parentPath}/${file.name}`);
       return {
+        ...brand,
         asset_type: "logo",
         variant: "logo",
         language: null,
@@ -104,21 +109,19 @@ function countingProvider(): { provider: AiProvider; calls: () => number } {
   return { provider, calls: () => calls };
 }
 
-// A provider whose AI call always fails, to exercise per-file resilience.
-const throwingProvider: AiProvider = {
-  generateStructured: async () => {
+// A builder whose call always fails, to exercise per-file resilience.
+const throwingProvider: MetadataBuilder = {
+  buildAssetMetadata: async () => {
     throw new Error("simulated AI failure");
   },
 };
 
-function scanOptions(drive: MockDrive, provider: AiProvider, db: Database.Database, full = false) {
+function scanOptions(drive: MockDrive, builder: MetadataBuilder, db: Database.Database, full = false) {
   return {
     driveClient: drive as unknown as DriveClient,
     rootFolderId: "root",
     db,
-    // Wrap the counting provider in an AiBuilder so these incremental tests keep
-    // asserting AI-call counts; the incremental logic under test is builder-agnostic.
-    builder: new AiBuilder(provider),
+    builder,
     outputDir,
     full,
   };
@@ -134,7 +137,7 @@ describe("runFullScan incremental", () => {
   beforeEach(() => {
     db = createTestDb();
     outputDir = join(process.env.TMPDIR || "/tmp", `logos-scan-test-${Math.random().toString(36).slice(2)}`);
-    require("fs").mkdirSync(outputDir, { recursive: true });
+    mkdirSync(outputDir, { recursive: true });
   });
 
   it("first scan processes every file and calls AI once per file", async () => {

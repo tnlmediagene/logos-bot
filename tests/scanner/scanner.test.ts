@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { classifyFolder, scanDriveRoot, ScannedFile } from "../../src/scanner/scanner";
+import { classifyFolder, scanDriveRoot } from "../../src/scanner/scanner";
 import { DriveClient, DriveFile } from "../../src/scanner/drive-client";
 import fixture from "../../fixtures/drive-listing.json";
 
