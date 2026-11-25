@@ -101,14 +101,10 @@
     "aliases": [
       "TNL Mediagene",
       "tnmg",
-      "集團",
-      "媒體集團",
       "tnlmg",
-      "TNLMediagene",
-      "關鍵集團",
-      "全集團"
+      "TNLMediagene"
     ],
-    "notes": ""
+    "notes": "「集團」類的泛稱已移到 tnl-digitech-group（關鍵數位科技集團）；這裡只留指名 TNL Mediagene 的寫法。"
   },
   "士奇傳播": {
     "aliases": [
@@ -130,10 +126,18 @@
   },
   "tnl-digitech-group": {
     "aliases": [
+      "關鍵數位科技集團",
+      "關鍵數位科技",
+      "數位科技集團",
+      "數位科技",
+      "集團",
+      "關鍵集團",
+      "全集團",
+      "媒體集團",
       "TNL Digitech Group",
       "TNL Digitech",
       "digitech"
     ],
-    "notes": "品牌資料夾目前沒有素材，比對得到也還取不到檔案；中文常用稱呼待補。"
+    "notes": "關鍵數位科技集團。集團層級的泛稱（集團／關鍵集團／全集團／媒體集團）都指向這裡，原本掛在 tnl-mediagene 的已移過來。品牌資料夾目前沒有素材，比對得到也還取不到檔案。"
   }
 }
