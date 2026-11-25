@@ -129,7 +129,11 @@
     "notes": ""
   },
   "tnl-digitech-group": {
-    "aliases": [],
-    "notes": ""
+    "aliases": [
+      "TNL Digitech Group",
+      "TNL Digitech",
+      "digitech"
+    ],
+    "notes": "品牌資料夾目前沒有素材，比對得到也還取不到檔案；中文常用稱呼待補。"
   }
 }
