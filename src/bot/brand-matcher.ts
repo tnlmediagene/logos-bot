@@ -34,11 +34,40 @@ export class BrandMatcher {
     });
   }
 
+  /**
+   * Brands whose aliases appear in `text`.
+   *
+   * A brand is dropped when EVERY alias it matched is contained in a longer
+   * alias that another matched brand contributed — that longer alias is the
+   * more specific reading of the same words, so the shorter one is only a
+   * fragment of it. "關鍵數位科技集團" matches 關鍵評論網's two-character
+   * alias 關鍵 purely because CJK aliases match by containment; the group's
+   * own full name is the real hit, so 關鍵評論網 steps aside. Likewise "TNL
+   * Mediagene" no longer drags in 關鍵評論網 through its "tnl" alias.
+   *
+   * Only overlapping aliases suppress each other, never unrelated ones: in
+   * "愛料理跟關鍵評論網的 logo" neither alias sits inside the other, so both
+   * brands survive and the caller still asks which one was meant.
+   */
   match(text: string): string[] {
-    const hits = new Set<string>();
-    for (const brand of this.table) {
-      if (brand.aliases.some((a) => aliasMatches(text, a))) hits.add(brand.id);
-    }
-    return [...hits];
+    const matched = this.table
+      .map((brand) => ({ id: brand.id, hits: brand.aliases.filter((a) => aliasMatches(text, a)) }))
+      .filter((brand) => brand.hits.length > 0);
+    if (matched.length < 2) return matched.map((brand) => brand.id);
+
+    const shadowed = (alias: string, byBrandId: string): boolean =>
+      matched.some(
+        (other) =>
+          other.id !== byBrandId &&
+          other.hits.some(
+            (h) => h.length > alias.length && h.toLowerCase().includes(alias.toLowerCase())
+          )
+      );
+
+    // Shadowing strictly shortens the alias, so two brands can never shadow
+    // each other and this can never empty the list.
+    return matched
+      .filter((brand) => brand.hits.some((alias) => !shadowed(alias, brand.id)))
+      .map((brand) => brand.id);
   }
 }
